@@ -2,16 +2,18 @@ package icinit_test
 
 import (
 	"context"
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/icestore/icinit"
-	"github.com/illmade-knight/go-iot/pkg/consumers"
-	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
-	"github.com/illmade-knight/go-iot/pkg/icestore"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/icestore/icinit"
+
+	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
+	"github.com/illmade-knight/go-iot/pkg/icestore"
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 )
 
 const (
@@ -38,12 +40,12 @@ func TestServerStartup(t *testing.T) {
 
 	// IceServiceConfig can be empty for this test as we aren't using the port from it.
 	gcsConfig := emulators.GetDefaultGCSConfig(testProjectID, testBucketName)
-	gcsClient, gcsCleanup := emulators.SetupGCSEmulator(t, ctx, gcsConfig)
-	defer gcsCleanup()
+	gcsConnections := emulators.SetupGCSEmulator(t, ctx, gcsConfig)
+	gcsClient := emulators.GetStorageClient(t, ctx, gcsConfig, gcsConnections.ClientOptions)
 
 	// Create mocks for the service dependencies.
 	// Correctly instantiate the mock consumer using its constructor.
-	mockConsumer := consumers.NewMockMessageConsumer(1) // Assumes this is defined in a shared test helper file
+	mockConsumer := messagepipeline.NewMockMessageConsumer(1) // Assumes this is defined in a shared test helper file
 
 	batcher, err := icestore.NewGCSBatchProcessor(
 		icestore.NewGCSClientAdapter(gcsClient),

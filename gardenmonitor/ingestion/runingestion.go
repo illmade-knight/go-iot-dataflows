@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
 	"os"
 	"os/signal"
 	"syscall"
@@ -10,6 +9,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
 	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 )
 

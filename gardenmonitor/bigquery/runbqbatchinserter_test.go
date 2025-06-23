@@ -17,7 +17,7 @@ import (
 	"cloud.google.com/go/bigquery"
 	"cloud.google.com/go/pubsub"
 	"github.com/illmade-knight/go-iot/pkg/bqstore"
-	"github.com/illmade-knight/go-iot/pkg/consumers"
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 	"github.com/illmade-knight/go-iot/pkg/types"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -58,26 +58,25 @@ func TestGardenMonitorService_FullFlow(t *testing.T) {
 
 	log.Info().Msg("Setting up Pub/Sub emulator for test...")
 	//_, pubsubCleanup := setupPubSubEmulatorForProcessingTest(ctx, t)
-	pubsubOptions, pubsubCleanup := emulators.SetupPubSubEmulator(t, ctx, emulators.PubsubConfig{
+	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, emulators.PubsubConfig{
 		GCImageContainer: emulators.GCImageContainer{
 			ImageContainer: emulators.ImageContainer{
-				EmulatorImage:    testPubSubEmulatorImage,
-				EmulatorHTTPPort: testPubSubEmulatorPort,
+				EmulatorImage: testPubSubEmulatorImage,
+				EmulatorPort:  testPubSubEmulatorPort,
 			},
 			ProjectID:       testProjectID,
 			SetEnvVariables: true,
 		},
 		TopicSubs: map[string]string{testInputTopicID: testInputSubscriptionID},
 	})
-	defer pubsubCleanup()
 
 	log.Info().Msg("Setting up BigQueryConfig emulator for test...")
 
-	bqOptions, bqCleanup := emulators.SetupBigQueryEmulator(t, ctx, emulators.BigQueryConfig{
+	bqConnections := emulators.SetupBigQueryEmulator(t, ctx, emulators.BigQueryConfig{
 		GCImageContainer: emulators.GCImageContainer{
 			ImageContainer: emulators.ImageContainer{
 				EmulatorImage:    testBigQueryEmulatorImage,
-				EmulatorHTTPPort: testBigQueryRestPort,
+				EmulatorPort:     testBigQueryRestPort,
 				EmulatorGRPCPort: testBigQueryGRPCPort,
 			},
 			ProjectID:       testProjectID,
@@ -86,7 +85,6 @@ func TestGardenMonitorService_FullFlow(t *testing.T) {
 		DatasetTables: map[string]string{testBigQueryDatasetID: testBigQueryTableID},
 		Schemas:       map[string]interface{}{testBigQueryTableID: types.GardenMonitorMessage{}},
 	})
-	defer bqCleanup()
 
 	// --- 1. Configure the application for the test environment (Unchanged) ---
 	cfg := &bqinit.Config{
@@ -114,22 +112,22 @@ func TestGardenMonitorService_FullFlow(t *testing.T) {
 
 	// --- 2. Build and Start the Service (Updated) ---
 	testLogger := log.With().Str("service", "garden-monitor-test").Logger()
-	bqClient, err := bigquery.NewClient(ctx, testProjectID, bqOptions...)
+	bqClient, err := bigquery.NewClient(ctx, testProjectID, bqConnections.ClientOptions...)
 	require.NotNil(t, bqClient)
 	defer bqClient.Close()
 
 	// Create the consumer from the shared package.
-	// definitely want to remove emulator stuff from consumers
+	// definitely want to remove emulator stuff from messagepipeline
 	//var opts []option.ClientOption
 	//pubsubEmulatorHost := os.Getenv("PUBSUB_EMULATOR_HOST")
 	//if pubsubEmulatorHost != "" {
 	//	logger.Info().Str("emulator_host", pubsubEmulatorHost).Str("subscription_id", cfg.SubscriptionID).Msg("Using Pub/Sub emulator for consumer.")
 	//	opts = append(opts, option.WithEndpoint(pubsubEmulatorHost), option.WithoutAuthentication())
 	//}
-	consumer, err := consumers.NewGooglePubsubConsumer(ctx, &consumers.GooglePubsubConsumerConfig{
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      cfg.ProjectID,
 		SubscriptionID: cfg.Consumer.SubscriptionID,
-	}, pubsubOptions, testLogger)
+	}, pubsubConnection.ClientOptions, testLogger)
 	require.NoError(t, err)
 
 	// Create the bqstore components.

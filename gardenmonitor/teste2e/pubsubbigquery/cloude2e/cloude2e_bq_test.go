@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/illmade-knight/go-iot/pkg/consumers"
-	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
 	"google.golang.org/api/option"
 	"os"
 	"strings"
@@ -30,6 +28,8 @@ import (
 
 	// Import library packages
 	"github.com/illmade-knight/go-iot/pkg/bqstore"
+	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 	"github.com/illmade-knight/go-iot/pkg/types"
 )
@@ -81,8 +81,7 @@ func TestE2E_Cloud_MqttToBigQueryFlow(t *testing.T) {
 
 	// --- 3. Setup Temporary Cloud & Local Infrastructure ---
 	log.Info().Msg("E2E: Setting up Mosquitto emulator...")
-	mqttBrokerURL, mosquittoCleanup := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
-	defer mosquittoCleanup()
+	mqttConnections := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
 
 	log.Info().Str("topic", topicID).Str("subscription", subscriptionID).Msg("CloudTest: Setting up real Cloud Pub/Sub resources...")
 	pubsubCleanup := setupRealPubSub(t, ctx, projectID, topicID, subscriptionID)
@@ -106,7 +105,7 @@ func TestE2E_Cloud_MqttToBigQueryFlow(t *testing.T) {
 			CredentialsFile string `mapstructure:"credentials_file"`
 		}{TopicID: topicID},
 		MQTT: mqttconverter.MQTTClientConfig{
-			BrokerURL:      mqttBrokerURL,
+			BrokerURL:      mqttConnections.EmulatorAddress,
 			Topic:          testMqttTopicPattern,
 			ClientIDPrefix: testMqttClientIDPrefix,
 			KeepAlive:      10 * time.Second,
@@ -168,7 +167,7 @@ func TestE2E_Cloud_MqttToBigQueryFlow(t *testing.T) {
 	require.NoError(t, err, "Failed to create real BigQueryConfig client")
 	defer bqClient.Close()
 
-	bqConsumer, err := consumers.NewGooglePubsubConsumer(ctx, &consumers.GooglePubsubConsumerConfig{
+	bqConsumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      bqCfg.ProjectID,
 		SubscriptionID: bqCfg.Consumer.SubscriptionID,
 	}, make([]option.ClientOption, 0), bqLogger)
@@ -194,7 +193,7 @@ func TestE2E_Cloud_MqttToBigQueryFlow(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	// --- 6. Publish a Test Message to MQTT ---
-	mqttTestPublisher, err := emulators.CreateTestMqttPublisher(mqttBrokerURL, "cloud-test-publisher")
+	mqttTestPublisher, err := emulators.CreateTestMqttPublisher(mqttConnections.EmulatorAddress, "cloud-test-publisher")
 	require.NoError(t, err)
 	defer mqttTestPublisher.Disconnect(250)
 

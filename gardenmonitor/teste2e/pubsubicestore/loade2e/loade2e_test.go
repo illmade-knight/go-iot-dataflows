@@ -18,20 +18,22 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/google/uuid"
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/icestore/icinit"
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
-	"github.com/illmade-knight/go-iot/pkg/consumers"
-	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
-	"github.com/illmade-knight/go-iot/pkg/helpers/loadgen"
-	"github.com/illmade-knight/go-iot/pkg/icestore"
-	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
-	"github.com/illmade-knight/go-iot/pkg/servicemanager"
-	"github.com/illmade-knight/go-iot/pkg/types"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
+
+	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/icestore/icinit"
+	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
+
+	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
+	"github.com/illmade-knight/go-iot/pkg/helpers/loadgen"
+	"github.com/illmade-knight/go-iot/pkg/icestore"
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
+	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
+	"github.com/illmade-knight/go-iot/pkg/servicemanager"
+	"github.com/illmade-knight/go-iot/pkg/types"
 )
 
 // --- Test Flags ---
@@ -104,7 +106,7 @@ func buildTestServicesDefinitionGCS(runID, gcpProjectID string) *servicemanager.
 
 // startGCSProcessingService has been updated to be more robust against propagation delays.
 // startGCSProcessingService has been updated to be more robust against propagation delays.
-func startGCSProcessingService(t *testing.T, ctx context.Context, gcpProjectID, subID, bucketName string) (*consumers.ProcessingService[icestore.ArchivalData], *icinit.Server) {
+func startGCSProcessingService(t *testing.T, ctx context.Context, gcpProjectID, subID, bucketName string) (*messagepipeline.ProcessingService[icestore.ArchivalData], *icinit.Server) {
 	t.Helper()
 	icestoreCfg := &icinit.IceServiceConfig{
 		LogLevel:  "info",
@@ -173,7 +175,7 @@ func startGCSProcessingService(t *testing.T, ctx context.Context, gcpProjectID, 
 	require.True(t, subExists, "Pub/Sub subscription %s was not found after multiple retries", subID)
 
 	// Now that resources are confirmed to exist, create the consumer.
-	gcsConsumer, err := consumers.NewGooglePubsubConsumer(ctx, &consumers.GooglePubsubConsumerConfig{
+	gcsConsumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      icestoreCfg.ProjectID,
 		SubscriptionID: icestoreCfg.Consumer.SubscriptionID,
 	}, nil, gcsLogger) // Pass the existing client to the consumer
@@ -251,10 +253,9 @@ func TestManagedCloudGCSSLoad(t *testing.T) {
 	log.Info().Str("bucket", bucketName).Str("topic", topicID).Str("subscription", subscriptionID).Msg("Using provisioned resources")
 
 	log.Info().Msg("LoadTest: Setting up Mosquitto container...")
-	mqttBrokerURL, mosquittoCleanup := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
-	defer mosquittoCleanup()
+	mqttConnections := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
 
-	_, mqttServer := startIngestionService(t, ctx, projectID, mqttBrokerURL, topicID)
+	_, mqttServer := startIngestionService(t, ctx, projectID, mqttConnections.EmulatorAddress, topicID)
 	defer mqttServer.Shutdown()
 
 	_, gcsServer := startGCSProcessingService(t, ctx, projectID, subscriptionID, bucketName)
@@ -265,7 +266,7 @@ func TestManagedCloudGCSSLoad(t *testing.T) {
 
 	log.Info().Msg("LoadTest: Configuring and starting load generator...")
 	loadgenLogger := log.With().Str("service", "load-generator").Logger()
-	loadgenClient := loadgen.NewMqttClient(mqttBrokerURL, testMqttTopicPattern, 1, loadgenLogger)
+	loadgenClient := loadgen.NewMqttClient(mqttConnections.EmulatorAddress, testMqttTopicPattern, 1, loadgenLogger)
 	devices := make([]*loadgen.Device, loadTestNumDevices)
 	for i := 0; i < loadTestNumDevices; i++ {
 		devices[i] = &loadgen.Device{

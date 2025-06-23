@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/bigquery/bqinit"
+	"github.com/illmade-knight/go-iot/pkg/bqstore"
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
+	"github.com/illmade-knight/go-iot/pkg/types"
 	"os"
 	"os/signal"
 	"syscall"
 
-	"github.com/illmade-knight/go-iot/pkg/bqstore"
-	"github.com/illmade-knight/go-iot/pkg/consumers"
-	"github.com/illmade-knight/go-iot/pkg/types"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -46,13 +46,13 @@ func main() {
 	}
 	defer bqClient.Close()
 
-	// Create the Pub/Sub consumer using the shared consumers package.
-	consumerCfg := &consumers.GooglePubsubConsumerConfig{
+	// Create the Pub/Sub consumer using the shared messagepipeline package.
+	consumerCfg := &messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      cfg.ProjectID,
 		SubscriptionID: cfg.Consumer.SubscriptionID,
 	}
 
-	consumer, err := consumers.NewGooglePubsubConsumer(ctx, consumerCfg, nil, log.Logger)
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, nil, log.Logger)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create Pub/Sub consumer")
 	}

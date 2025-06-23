@@ -8,9 +8,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/illmade-knight/go-iot/pkg/consumers"
 	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
 	"github.com/illmade-knight/go-iot/pkg/icestore"
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 	"google.golang.org/api/iterator"
 	"net/http"
 	"os"
@@ -119,27 +119,25 @@ func runE2ETestCase(t *testing.T, tc e2eTestCase) {
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
 
 	log.Info().Msg("E2E: Setting up Mosquitto emulator...")
-	mqttBrokerURL, mosquittoCleanup := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
-	defer mosquittoCleanup()
+	mqttConnections := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
 
 	log.Info().Msg("E2E: Setting up Pub/Sub emulator...")
-	pubsubOptions, pubsubCleanup := emulators.SetupPubSubEmulator(t, ctx, emulators.PubsubConfig{
+	pubsubConnections := emulators.SetupPubsubEmulator(t, ctx, emulators.PubsubConfig{
 		GCImageContainer: emulators.GCImageContainer{
 			ImageContainer: emulators.ImageContainer{
-				EmulatorImage:    testPubsubEmulatorImage,
-				EmulatorHTTPPort: testPubsubEmulatorPort,
+				EmulatorImage: testPubsubEmulatorImage,
+				EmulatorPort:  testPubsubEmulatorPort,
 			},
 			ProjectID: testProjectID,
 		},
 		TopicSubs: map[string]string{testPubsubTopicID: testPubsubSubscriptionID},
 	})
-	defer pubsubCleanup()
 
 	consumerLogger := log.With().Str("service", "pubsub-consumer").Logger()
-	gcsConsumer, err := consumers.NewGooglePubsubConsumer(ctx, &consumers.GooglePubsubConsumerConfig{
+	gcsConsumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      testProjectID,
 		SubscriptionID: testPubsubSubscriptionID,
-	}, pubsubOptions, consumerLogger)
+	}, pubsubConnections.ClientOptions, consumerLogger)
 	require.NoError(t, err)
 
 	log.Info().Msg("Pausing before ingestion setup")
@@ -156,7 +154,7 @@ func runE2ETestCase(t *testing.T, tc e2eTestCase) {
 			TopicID: testPubsubTopicID,
 		},
 		MQTT: mqttconverter.MQTTClientConfig{
-			BrokerURL:      mqttBrokerURL,
+			BrokerURL:      mqttConnections.EmulatorAddress,
 			Topic:          testMqttTopicPattern,
 			ClientIDPrefix: "ingestion-test-client-",
 			KeepAlive:      10 * time.Second,
@@ -213,8 +211,9 @@ func runE2ETestCase(t *testing.T, tc e2eTestCase) {
 	}
 
 	gcsLogger := log.With().Str("service", "gcs-processor").Logger()
-	gcsClient, gcsCleanUp := emulators.SetupGCSEmulator(t, ctx, emulators.GetDefaultGCSConfig(testProjectID, testGCSBucket))
-	defer gcsCleanUp()
+	gcsConfig := emulators.GetDefaultGCSConfig(testProjectID, testGCSBucket)
+	gcsConnections := emulators.SetupGCSEmulator(t, ctx, gcsConfig)
+	gcsClient := emulators.GetStorageClient(t, ctx, gcsConfig, gcsConnections.ClientOptions)
 
 	// Clear the GCS bucket before each test case run to ensure isolation
 	require.NoError(t, clearBucket(ctx, gcsClient.Bucket(testGCSBucket)), "Failed to clear GCS bucket")
@@ -243,7 +242,7 @@ func runE2ETestCase(t *testing.T, tc e2eTestCase) {
 
 	// --- 4. Publish Test Messages to MQTT ---
 	if len(tc.messagesToPublish) > 0 {
-		mqttTestPublisher, err := emulators.CreateTestMqttPublisher(mqttBrokerURL, "e2e-test-publisher")
+		mqttTestPublisher, err := emulators.CreateTestMqttPublisher(mqttConnections.EmulatorAddress, "e2e-test-publisher")
 		require.NoError(t, err)
 		defer mqttTestPublisher.Disconnect(250)
 

@@ -3,15 +3,10 @@
 package managedload_test
 
 import (
-	"cloud.google.com/go/pubsub"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/bigquery/bqinit"
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
-	"github.com/illmade-knight/go-iot/pkg/consumers"
-	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
 	"net/http"
 	"os"
 	"sync"
@@ -19,6 +14,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/bigquery"
+	"cloud.google.com/go/pubsub"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -26,8 +22,13 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
 
+	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/bigquery/bqinit"
+	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
+
 	"github.com/illmade-knight/go-iot/pkg/bqstore"
+	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
 	"github.com/illmade-knight/go-iot/pkg/helpers/loadgen"
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 	"github.com/illmade-knight/go-iot/pkg/servicemanager"
 	"github.com/illmade-knight/go-iot/pkg/types"
@@ -175,10 +176,9 @@ func TestManagedCloudLoad(t *testing.T) {
 
 	// --- 5. Start Local Services & Load Generator ---
 	log.Info().Msg("LoadTest: Setting up Mosquitto container...")
-	mqttBrokerURL, mosquittoCleanup := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
-	defer mosquittoCleanup()
+	mqttConnections := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
 
-	ingestionService, mqttServer := startIngestionService(t, ctx, projectID, mqttBrokerURL, topicID)
+	ingestionService, mqttServer := startIngestionService(t, ctx, projectID, mqttConnections.EmulatorAddress, topicID)
 	defer mqttServer.Shutdown()
 
 	var processingErrors []error
@@ -200,7 +200,7 @@ func TestManagedCloudLoad(t *testing.T) {
 
 	log.Info().Msg("LoadTest: Configuring and starting load generator...")
 	loadgenLogger := log.With().Str("service", "load-generator").Logger()
-	loadgenClient := loadgen.NewMqttClient(mqttBrokerURL, testMqttTopicPattern, 1, loadgenLogger)
+	loadgenClient := loadgen.NewMqttClient(mqttConnections.EmulatorAddress, testMqttTopicPattern, 1, loadgenLogger)
 	devices := make([]*loadgen.Device, loadTestNumDevices)
 	deviceIDs := make([]string, loadTestNumDevices)
 	for i := 0; i < loadTestNumDevices; i++ {
@@ -333,7 +333,7 @@ func startIngestionService(t *testing.T, ctx context.Context, projectID, mqttBro
 	return service, server
 }
 
-func startBQProcessingService(t *testing.T, ctx context.Context, gcpProjectID, subID, datasetID, tableID string) (*consumers.ProcessingService[types.GardenMonitorReadings], *bqinit.Server) {
+func startBQProcessingService(t *testing.T, ctx context.Context, gcpProjectID, subID, datasetID, tableID string) (*messagepipeline.ProcessingService[types.GardenMonitorReadings], *bqinit.Server) {
 	t.Helper()
 	bqCfg := &bqinit.Config{
 		LogLevel:  "info",
@@ -363,7 +363,7 @@ func startBQProcessingService(t *testing.T, ctx context.Context, gcpProjectID, s
 	bqClient, err := bigquery.NewClient(ctx, gcpProjectID)
 	require.NoError(t, err)
 
-	bqConsumer, err := consumers.NewGooglePubsubConsumer(ctx, &consumers.GooglePubsubConsumerConfig{
+	bqConsumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      bqCfg.ProjectID,
 		SubscriptionID: bqCfg.Consumer.SubscriptionID,
 	}, nil, bqLogger)

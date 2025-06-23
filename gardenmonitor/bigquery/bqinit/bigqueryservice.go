@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"time"
 
-	// Import the new generic consumers package
-	"github.com/illmade-knight/go-iot/pkg/consumers"
+	// Import the new generic messagepipeline package
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 	"github.com/illmade-knight/go-iot/pkg/types"
 	"github.com/rs/zerolog"
 )
@@ -19,13 +19,13 @@ type Server struct {
 	logger zerolog.Logger
 	config *Config
 	// The server now holds a pointer to the generic ProcessingService.
-	batchProcessing *consumers.ProcessingService[types.GardenMonitorReadings]
+	batchProcessing *messagepipeline.ProcessingService[types.GardenMonitorReadings]
 	httpServer      *http.Server
 }
 
 // NewServer creates and configures a new Server instance.
 // Its signature is updated to accept the generic service type.
-func NewServer(cfg *Config, b *consumers.ProcessingService[types.GardenMonitorReadings], logger zerolog.Logger) *Server {
+func NewServer(cfg *Config, b *messagepipeline.ProcessingService[types.GardenMonitorReadings], logger zerolog.Logger) *Server {
 	return &Server{
 		logger:          logger,
 		config:          cfg,

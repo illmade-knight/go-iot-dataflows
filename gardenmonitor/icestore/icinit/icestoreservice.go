@@ -3,12 +3,12 @@ package icinit
 import (
 	"context"
 	"fmt"
-	"github.com/illmade-knight/go-iot/pkg/icestore"
 	"net/http"
 	"time"
 
-	// Import the new generic consumers package
-	"github.com/illmade-knight/go-iot/pkg/consumers"
+	"github.com/illmade-knight/go-iot/pkg/icestore"
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
+
 	"github.com/rs/zerolog"
 )
 
@@ -19,13 +19,13 @@ type Server struct {
 	logger zerolog.Logger
 	config *IceServiceConfig
 	// The server now holds a pointer to the generic ProcessingService.
-	batchProcessing *consumers.ProcessingService[icestore.ArchivalData]
+	batchProcessing *messagepipeline.ProcessingService[icestore.ArchivalData]
 	httpServer      *http.Server
 }
 
 // NewServer creates and configures a new Server instance.
 // Its signature is updated to accept the generic service type.
-func NewServer(cfg *IceServiceConfig, b *consumers.ProcessingService[icestore.ArchivalData], logger zerolog.Logger) *Server {
+func NewServer(cfg *IceServiceConfig, b *messagepipeline.ProcessingService[icestore.ArchivalData], logger zerolog.Logger) *Server {
 	return &Server{
 		logger:          logger,
 		config:          cfg,

@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/illmade-knight/go-iot/pkg/consumers"
-	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
 	"net/http"
 	"os"
 	"strings"
@@ -21,12 +19,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
+
 	// Import initializers for both services
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/bigquery/bqinit"
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
 
-	// Import library packages
 	"github.com/illmade-knight/go-iot/pkg/bqstore"
+	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
+	// Import library packages
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 	"github.com/illmade-knight/go-iot/pkg/types"
 )
@@ -68,18 +69,15 @@ func TestE2E_MqttToBigQueryFlow(t *testing.T) {
 
 	// --- 1. Start All Emulators ---
 	log.Info().Msg("E2E: Setting up Mosquitto emulator...")
-	mqttBrokerURL, mosquittoCleanup := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
-	defer mosquittoCleanup()
+	mqttConnections := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
 
 	log.Info().Msg("E2E: Setting up Pub/Sub emulator...")
 	pubsubCfg := emulators.GetDefaultPubsubConfig(testProjectID, map[string]string{testPubsubTopicID: testPubsubSubscriptionID})
-	pubsubOptions, pubsubCleanup := emulators.SetupPubSubEmulator(t, ctx, pubsubCfg)
-	defer pubsubCleanup()
+	pubsubConnections := emulators.SetupPubsubEmulator(t, ctx, pubsubCfg)
 
 	log.Info().Msg("E2E: Setting up BigQueryConfig emulator...")
 	bqCfg := emulators.GetDefaultBigQueryConfig(testProjectID, map[string]string{e2eBigQueryDatasetID: e2eBigQueryTableID}, map[string]interface{}{e2eBigQueryTableID: types.GardenMonitorReadings{}})
-	bqOptions, bqCleanup := emulators.SetupBigQueryEmulator(t, ctx, bqCfg)
-	defer bqCleanup()
+	bqConnections := emulators.SetupBigQueryEmulator(t, ctx, bqCfg)
 
 	//ensure service start
 	log.Info().Msg("Pausing before ingestion setup")
@@ -97,7 +95,7 @@ func TestE2E_MqttToBigQueryFlow(t *testing.T) {
 			TopicID: testPubsubTopicID,
 		},
 		MQTT: mqttconverter.MQTTClientConfig{
-			BrokerURL:      mqttBrokerURL,
+			BrokerURL:      mqttConnections.EmulatorAddress,
 			Topic:          testMqttTopicPattern,
 			ClientIDPrefix: "ingestion-test-client-",
 			KeepAlive:      10 * time.Second,
@@ -113,7 +111,7 @@ func TestE2E_MqttToBigQueryFlow(t *testing.T) {
 	mqttPublisher, err := mqttconverter.NewGooglePubsubPublisher(ctx, mqttconverter.GooglePubsubPublisherConfig{
 		ProjectID:       mqttCfg.ProjectID,
 		TopicID:         mqttCfg.Publisher.TopicID,
-		ClientOptions:   pubsubOptions,
+		ClientOptions:   pubsubConnections.ClientOptions,
 		PublishSettings: mqttconverter.GetDefaultPublishSettings(),
 	}, mqttLogger)
 	require.NoError(t, err)
@@ -157,13 +155,13 @@ func TestE2E_MqttToBigQueryFlow(t *testing.T) {
 	}
 
 	bqLogger := log.With().Str("service", "bq-processor").Logger()
-	bqClient, err := bigquery.NewClient(ctx, testProjectID, bqOptions...)
+	bqClient, err := bigquery.NewClient(ctx, testProjectID, bqConnections.ClientOptions...)
 	defer bqClient.Close()
 
-	bqConsumer, err := consumers.NewGooglePubsubConsumer(ctx, &consumers.GooglePubsubConsumerConfig{
+	bqConsumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      testProjectID,
 		SubscriptionID: testPubsubSubscriptionID,
-	}, pubsubOptions, bqLogger)
+	}, pubsubConnections.ClientOptions, bqLogger)
 	require.NoError(t, err)
 
 	// *** REFACTORED PART: Use the new, single convenience constructor ***
@@ -186,7 +184,7 @@ func TestE2E_MqttToBigQueryFlow(t *testing.T) {
 	time.Sleep(3 * time.Second) // Give services time to start and connect
 
 	// --- 4. Publish a Test Message to MQTT ---
-	mqttTestPublisher, err := emulators.CreateTestMqttPublisher(mqttBrokerURL, "e2e-test-publisher")
+	mqttTestPublisher, err := emulators.CreateTestMqttPublisher(mqttConnections.EmulatorAddress, "e2e-test-publisher")
 	require.NoError(t, err)
 	defer mqttTestPublisher.Disconnect(250)
 

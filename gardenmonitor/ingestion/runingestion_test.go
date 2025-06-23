@@ -7,8 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/illmade-knight/ai-power-mvp/dataflows/gardenmonitor/ingestion/mqinit"
-	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,13 +14,18 @@ import (
 	"testing"
 	"time"
 
-	"cloud.google.com/go/pubsub"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
-	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
-	"github.com/rs/zerolog"
-	"github.com/rs/zerolog/log"
+
+	"cloud.google.com/go/pubsub"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
+	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
+	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
+
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -53,17 +56,16 @@ func TestMqttIngestionService_FullFlow(t *testing.T) {
 	defer mosquittoCleanup()
 
 	log.Info().Msg("Setting up Pub/Sub emulator for test...")
-	pubsubOptions, pubsubCleanup := emulators.SetupPubSubEmulator(t, ctx, &emulators.PubsubConfig{
+	pubsubConnections := emulators.SetupPubsubEmulator(t, ctx, emulators.PubsubConfig{
 		GCImageContainer: emulators.GCImageContainer{
 			ImageContainer: emulators.ImageContainer{
-				EmulatorImage:    testPubsubEmulatorImage,
-				EmulatorHTTPPort: "8085",
+				EmulatorImage: testPubsubEmulatorImage,
+				EmulatorPort:  "8085",
 			},
 			ProjectID: testProjectID,
 		},
 		TopicSubs: map[string]string{testPubSubTopicID: testPubSubSubscriptionID},
 	})
-	defer pubsubCleanup()
 
 	// --- 2. Configure the application for the test environment ---
 	cfg := &mqinit.Config{
@@ -93,7 +95,7 @@ func TestMqttIngestionService_FullFlow(t *testing.T) {
 	testLogger := log.With().Str("service", "mqtt-ingestion-test").Logger()
 
 	// The publisher will correctly use the PUBSUB_EMULATOR_HOST env var.
-	publisher, err := mqttconverter.NewGooglePubSubPublisher(ctx, &mqttconverter.GooglePubSubPublisherConfig{
+	publisher, err := mqttconverter.NewGooglePubsubPublisher(ctx, mqttconverter.GooglePubsubPublisherConfig{
 		ProjectID: cfg.ProjectID,
 		TopicID:   cfg.Publisher.TopicID,
 	}, testLogger)
@@ -118,7 +120,7 @@ func TestMqttIngestionService_FullFlow(t *testing.T) {
 
 	// --- 5. Prepare Test Clients (Pub/Sub Subscriber and MQTT Publisher) ---
 	// Create Pub/Sub client for verification, configured explicitly to use the emulator.
-	psClient, err := pubsub.NewClient(ctx, testProjectID, pubsubOptions...)
+	psClient, err := pubsub.NewClient(ctx, testProjectID, pubsubConnections.ClientOptions...)
 	require.NoError(t, err)
 	defer psClient.Close()
 

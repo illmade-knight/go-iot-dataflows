@@ -3,15 +3,17 @@ package main
 import (
 	"cloud.google.com/go/storage"
 	"context"
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/icestore/icinit"
-	"github.com/illmade-knight/go-iot/pkg/icestore"
 	"google.golang.org/api/option"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/illmade-knight/go-iot/pkg/consumers"
+	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/icestore/icinit"
+
+	"github.com/illmade-knight/go-iot/pkg/icestore"
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -47,12 +49,12 @@ func main() {
 	// Create the bucket in the GCS emulator
 	err = gcsClient.Bucket(cfg.IceStore.BucketName).Create(ctx, cfg.ProjectID, nil)
 
-	// Create the Pub/Sub consumer using the shared consumers package.
-	consumerCfg := &consumers.GooglePubsubConsumerConfig{
+	// Create the Pub/Sub consumer using the shared messagepipeline package.
+	consumerCfg := &messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      cfg.ProjectID,
 		SubscriptionID: cfg.Consumer.SubscriptionID,
 	}
-	consumer, err := consumers.NewGooglePubsubConsumer(ctx, consumerCfg, nil, log.Logger)
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, nil, log.Logger)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create Pub/Sub consumer")
 	}

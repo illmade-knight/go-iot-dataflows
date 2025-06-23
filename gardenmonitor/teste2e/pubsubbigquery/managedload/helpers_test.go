@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"google.golang.org/api/iterator"
 	"math/rand"
 	"sort"
 	"sync"
@@ -15,8 +14,11 @@ import (
 	"time"
 
 	"cloud.google.com/go/bigquery"
+	"google.golang.org/api/iterator"
+
 	"github.com/illmade-knight/go-iot/pkg/helpers/loadgen"
 	"github.com/illmade-knight/go-iot/pkg/types"
+
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )

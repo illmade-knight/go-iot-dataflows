@@ -2,12 +2,13 @@ package mqinit_test
 
 import (
 	"context"
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
 	"net/http"
 	"testing"
 	"time"
 
+	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
 	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
+
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 )

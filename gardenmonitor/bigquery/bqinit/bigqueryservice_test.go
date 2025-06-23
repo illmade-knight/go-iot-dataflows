@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/illmade-knight/go-iot/pkg/bqstore"
-	"github.com/illmade-knight/go-iot/pkg/consumers"
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 	"github.com/illmade-knight/go-iot/pkg/types"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -34,7 +34,7 @@ func TestServerStartup(t *testing.T) {
 
 	// Create mocks for the service dependencies.
 	// Correctly instantiate the mock consumer using its constructor.
-	mockConsumer := consumers.NewMockMessageConsumer(1) // Assumes this is defined in a shared test helper file
+	mockConsumer := messagepipeline.NewMockMessageConsumer(1) // Assumes this is defined in a shared test helper file
 	mockInserter := &MockInserter[types.GardenMonitorReadings]{}
 
 	batcher := bqstore.NewBatcher[types.GardenMonitorReadings](

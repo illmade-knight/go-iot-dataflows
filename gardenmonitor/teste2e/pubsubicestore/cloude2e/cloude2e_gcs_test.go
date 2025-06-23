@@ -10,9 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/google/uuid"
-	"github.com/illmade-knight/go-iot/pkg/consumers"
-	"github.com/illmade-knight/go-iot/pkg/helpers/emulators" // Now expected to contain all emulator helper functions
-	"github.com/illmade-knight/go-iot/pkg/icestore"
 	"google.golang.org/api/iterator"
 	"net/http"
 	"os"
@@ -29,6 +26,9 @@ import (
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/icestore/icinit"
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
 
+	"github.com/illmade-knight/go-iot/pkg/helpers/emulators" // Now expected to contain all emulator helper functions
+	"github.com/illmade-knight/go-iot/pkg/icestore"
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 	"github.com/illmade-knight/go-iot/pkg/types"
 )
@@ -88,8 +88,7 @@ func TestE2E_MqttToIceStoreFlowCloud(t *testing.T) {
 	defer suiteCancel() // Ensure this is called when the suite finishes
 
 	log.Info().Msg("E2E Cloud: Setting up Mosquitto emulator (once for all tests)...")
-	mqttBrokerURL, mosquittoCleanup := emulators.SetupMosquittoContainer(t, suiteCtx, emulators.GetDefaultMqttImageContainer())
-	defer mosquittoCleanup() // This will clean up after all subtests complete
+	mqttConnections := emulators.SetupMosquittoContainer(t, suiteCtx, emulators.GetDefaultMqttImageContainer())
 
 	pubsubCleanup, err := setupRealPubSub(t, suiteCtx, projectID, cloudPubsubTopicID, cloudPubsubSubscriptionID)
 	defer pubsubCleanup()
@@ -136,7 +135,7 @@ func TestE2E_MqttToIceStoreFlowCloud(t *testing.T) {
 	// Run each test case
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			runCloudE2ETestCase(t, projectID, mqttBrokerURL, tc)
+			runCloudE2ETestCase(t, projectID, mqttConnections.EmulatorAddress, tc)
 		})
 	}
 }
@@ -305,7 +304,7 @@ func runCloudE2ETestCase(t *testing.T, projectID, mqttBrokerURL string, tc e2eTe
 		require.NoError(t, err)
 	}
 
-	gcsConsumer, err := consumers.NewGooglePubsubConsumer(ctx, &consumers.GooglePubsubConsumerConfig{
+	gcsConsumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      projectID,
 		SubscriptionID: cloudPubsubSubscriptionID,
 	}, nil, gcsLogger) // nil for pubsub.ClientOption, relies on ADC/credentials

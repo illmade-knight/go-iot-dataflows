@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"gcpdeploy/templates"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,8 +14,11 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/gcpdeploy/templates"
+
 	"github.com/illmade-knight/go-iot/pkg/servicemanager"
 	"github.com/illmade-knight/go-iot/pkg/types"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )

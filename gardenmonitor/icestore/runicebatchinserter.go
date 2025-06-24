@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cloud.google.com/go/pubsub"
 	"cloud.google.com/go/storage"
 	"context"
 	"google.golang.org/api/option"
@@ -54,7 +55,11 @@ func main() {
 		ProjectID:      cfg.ProjectID,
 		SubscriptionID: cfg.Consumer.SubscriptionID,
 	}
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, nil, log.Logger)
+
+	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID)
+	defer psClient.Close()
+
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, log.Logger)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create Pub/Sub consumer")
 	}

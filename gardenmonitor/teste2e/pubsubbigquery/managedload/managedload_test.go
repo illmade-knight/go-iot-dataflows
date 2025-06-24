@@ -25,9 +25,10 @@ import (
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/bigquery/bqinit"
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
 
+	"github.com/illmade-knight/go-iot/helpers/emulators"
+	"github.com/illmade-knight/go-iot/helpers/loadgen"
+
 	"github.com/illmade-knight/go-iot/pkg/bqstore"
-	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
-	"github.com/illmade-knight/go-iot/pkg/helpers/loadgen"
 	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 	"github.com/illmade-knight/go-iot/pkg/servicemanager"
@@ -363,10 +364,13 @@ func startBQProcessingService(t *testing.T, ctx context.Context, gcpProjectID, s
 	bqClient, err := bigquery.NewClient(ctx, gcpProjectID)
 	require.NoError(t, err)
 
-	bqConsumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
+	psClient, err := pubsub.NewClient(ctx, gcpProjectID)
+	require.NoError(t, err)
+
+	bqConsumer, err := messagepipeline.NewGooglePubsubConsumer(&messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      bqCfg.ProjectID,
 		SubscriptionID: bqCfg.Consumer.SubscriptionID,
-	}, nil, bqLogger)
+	}, psClient, bqLogger)
 	require.NoError(t, err)
 
 	// *** REFACTORED PART: Use the new, single convenience constructor ***

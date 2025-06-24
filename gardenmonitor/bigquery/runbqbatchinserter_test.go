@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/bigquery/bqinit"
-	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
+	"github.com/illmade-knight/go-iot/helpers/emulators"
 	"net/http"
 	"os"
 	"strings"
@@ -116,18 +116,12 @@ func TestGardenMonitorService_FullFlow(t *testing.T) {
 	require.NotNil(t, bqClient)
 	defer bqClient.Close()
 
-	// Create the consumer from the shared package.
-	// definitely want to remove emulator stuff from messagepipeline
-	//var opts []option.ClientOption
-	//pubsubEmulatorHost := os.Getenv("PUBSUB_EMULATOR_HOST")
-	//if pubsubEmulatorHost != "" {
-	//	logger.Info().Str("emulator_host", pubsubEmulatorHost).Str("subscription_id", cfg.SubscriptionID).Msg("Using Pub/Sub emulator for consumer.")
-	//	opts = append(opts, option.WithEndpoint(pubsubEmulatorHost), option.WithoutAuthentication())
-	//}
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
+	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID, pubsubConnection.ClientOptions...)
+	require.NoError(t, err)
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(&messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      cfg.ProjectID,
 		SubscriptionID: cfg.Consumer.SubscriptionID,
-	}, pubsubConnection.ClientOptions, testLogger)
+	}, psClient, testLogger)
 	require.NoError(t, err)
 
 	// Create the bqstore components.

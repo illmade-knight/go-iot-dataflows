@@ -21,7 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
-	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
+	"github.com/illmade-knight/go-iot/helpers/emulators"
 	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 
 	"github.com/rs/zerolog"

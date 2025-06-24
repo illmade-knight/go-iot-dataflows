@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cloud.google.com/go/pubsub"
 	"context"
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/bigquery/bqinit"
 	"github.com/illmade-knight/go-iot/pkg/bqstore"
@@ -52,7 +53,12 @@ func main() {
 		SubscriptionID: cfg.Consumer.SubscriptionID,
 	}
 
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, nil, log.Logger)
+	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID)
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to create pubsub client")
+	}
+
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, log.Logger)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create Pub/Sub consumer")
 	}

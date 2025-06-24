@@ -24,9 +24,9 @@ import (
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/bigquery/bqinit"
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
 
-	"github.com/illmade-knight/go-iot/pkg/bqstore"
-	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
+	"github.com/illmade-knight/go-iot/helpers/emulators"
 	// Import library packages
+	"github.com/illmade-knight/go-iot/pkg/bqstore"
 	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 	"github.com/illmade-knight/go-iot/pkg/types"

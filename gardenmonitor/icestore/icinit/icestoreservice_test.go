@@ -11,7 +11,7 @@ import (
 
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/icestore/icinit"
 
-	"github.com/illmade-knight/go-iot/pkg/helpers/emulators"
+	"github.com/illmade-knight/go-iot/helpers/emulators"
 	"github.com/illmade-knight/go-iot/pkg/icestore"
 	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 )

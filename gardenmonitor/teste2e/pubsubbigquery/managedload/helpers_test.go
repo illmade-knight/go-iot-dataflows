@@ -16,7 +16,7 @@ import (
 	"cloud.google.com/go/bigquery"
 	"google.golang.org/api/iterator"
 
-	"github.com/illmade-knight/go-iot/pkg/helpers/loadgen"
+	"github.com/illmade-knight/go-iot/helpers/loadgen"
 	"github.com/illmade-knight/go-iot/pkg/types"
 
 	"github.com/rs/zerolog/log"

@@ -8,6 +8,7 @@ require (
 	cloud.google.com/go/pubsub v1.49.0
 	cloud.google.com/go/storage v1.55.0
 	github.com/eclipse/paho.mqtt.golang v1.5.0
+	github.com/go-redis/redis/v8 v8.11.5
 	github.com/google/uuid v1.6.0
 	github.com/illmade-knight/go-iot v0.0.7-alpha.3
 	github.com/rs/zerolog v1.34.0
@@ -55,7 +56,6 @@ require (
 	github.com/go-logr/logr v1.4.2 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/go-redis/redis/v8 v8.11.5 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect

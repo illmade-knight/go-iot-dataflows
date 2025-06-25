@@ -10,12 +10,13 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"sync"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/bigquery"
+	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/pubsub"
+	"github.com/go-redis/redis/v8"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
@@ -24,73 +25,71 @@ import (
 	"google.golang.org/api/iterator"
 
 	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/bigquery/bqinit"
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/enrich/eninit" // Import for enrichment config
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
+	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/enrich/eninit"
 
 	"github.com/illmade-knight/go-iot/helpers/emulators"
 	"github.com/illmade-knight/go-iot/helpers/loadgen"
 
 	"github.com/illmade-knight/go-iot/pkg/bqstore"
-	"github.com/illmade-knight/go-iot/pkg/device" // For in-memory device cache in test
-	"github.com/illmade-knight/go-iot/pkg/enrichment"
+	"github.com/illmade-knight/go-iot/pkg/device"
 	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
-	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 	"github.com/illmade-knight/go-iot/pkg/servicemanager"
-	"github.com/illmade-knight/go-iot/pkg/types" // Original types
+	"github.com/illmade-knight/go-iot/pkg/types"
 )
 
 // --- Test Flags ---
 var (
-	keepDataset = flag.Bool("keep-dataset", false, "If true, the BigQueryConfig dataset will not be deleted after the test, but will expire automatically after 1 day.")
+	keepEnrichedDataset = flag.Bool("keep-enriched-dataset", false, "If true, the BigQuery dataset for the enriched dataflow will not be deleted after the test.")
 )
 
-// --- Test Constants ---
+// --- Enriched Test Constants ---
 const (
-	cloudTestGCPProjectID   = "gemini-power-test"
-	loadTestDuration        = 30 * time.Second
-	loadTestNumDevices      = 10
-	loadTestRatePerDevice   = 2.0
-	loadTestSuccessPercent  = 0.98
-	cloudLoadTestTimeout    = 10 * time.Minute
-	testMqttTopicPattern    = "devices/+/data"
-	testMqttClientIDPrefix  = "ingestion-service-cloud-load"
-	cloudTestMqttHTTPPort   = ":9092"
-	cloudTestEnrichHTTPPort = ":9094" // New port for enrichment service
-	cloudTestBqHTTPPort     = ":9093"
+	enrichedCloudTestGCPProjectID = "gemini-power-test"
+	enrichedLoadTestDuration      = 30 * time.Second
+	enrichedLoadTestNumDevices    = 5
+	enrichedLoadTestRatePerDevice = 2.0
+	enrichedSuccessPercent        = 0.98
+	enrichedCloudLoadTestTimeout  = 12 * time.Minute
+	firestoreCollection           = "devices"
+	testMqttTopicPattern          = "devices/+/data"
+	testMqttClientIDPrefix        = "ingestion-service-cloud-load"
+	cloudTestMqttHTTPPort         = ":9092"
+	cloudTestBqHTTPPort           = ":9093"
 )
 
-// TestBigQueryEnrichedPayload is the structure that will be stored in BigQuery.
-// It flattens the `enrich.EnrichedMessage` by embedding `types.ConsumedMessage`
-// and adding the enrichment fields directly for BigQuery compatibility.
-type TestBigQueryEnrichedPayload struct {
-	// Original fields from ConsumedMessage.Payload (assuming it's JSON)
-	Value     float64   `json:"value" bigquery:"value"`
-	Timestamp time.Time `json:"timestamp" bigquery:"timestamp"`
-	// Original DeviceInfo from ConsumedMessage attributes
-	OriginalUID string `json:"originalUid" bigquery:"originalUid"` // Renamed from DeviceInfo.UID
-	// Enriched fields
-	ClientID   string `json:"clientID" bigquery:"clientID"`
-	LocationID string `json:"locationID" bigquery:"locationID"`
-	Category   string `json:"category" bigquery:"category"`
-	// Add other necessary fields from original ConsumedMessage or its payload
-	MessageID   string    `json:"messageID" bigquery:"messageID"`
-	PublishTime time.Time `json:"publishTime" bigquery:"publishTime"`
+// EnrichedGardenMonitorReadings defines the schema for our BigQuery table that stores the final, enriched data.
+// It includes both the original telemetry and the metadata added by the enrichment service.
+type EnrichedGardenMonitorReadings struct {
+	// Original Data (can be nested for clarity)
+	DE           string    `bigquery:"uid"`
+	SIM          string    `bigquery:"sim"`
+	RSSI         string    `bigquery:"rssi"`
+	Version      string    `bigquery:"version"`
+	Sequence     int       `bigquery:"sequence"`
+	Battery      int       `bigquery:"battery"`
+	Temperature  int       `bigquery:"temperature"`
+	Humidity     int       `bigquery:"humidity"`
+	SoilMoisture int       `bigquery:"soil_moisture"`
+	WaterFlow    int       `bigquery:"water_flow"`
+	WaterQuality int       `bigquery:"water_quality"`
+	TankLevel    int       `bigquery:"tank_level"`
+	AmbientLight int       `bigquery:"ambient_light"`
+	Timestamp    time.Time `bigquery:"timestamp"`
+	// Enriched Data
+	ClientID   string `bigquery:"client_id"`
+	LocationID string `bigquery:"location_id"`
+	Category   string `bigquery:"category"`
 }
 
-// buildTestServicesDefinition creates a complete TopLevelConfig in memory for the load test.
-// Now includes an intermediate enrichment topic/subscription.
-func buildTestServicesDefinition(runID, gcpProjectID string) *servicemanager.TopLevelConfig {
+// buildEnrichedTestServicesDefinition creates the service definition for the complete, enriched dataflow.
+func buildEnrichedTestServicesDefinition(runID, gcpProjectID string) *servicemanager.TopLevelConfig {
 	dataflowName := "mqtt-to-enriched-bigquery-loadtest"
-	// Topics
 	rawTopicID := fmt.Sprintf("raw-device-data-%s", runID)
 	enrichedTopicID := fmt.Sprintf("enriched-device-data-%s", runID)
-
-	// Subscriptions
 	enrichmentSubID := fmt.Sprintf("enrichment-service-sub-%s", runID)
-	analysisSubID := fmt.Sprintf("analysis-service-sub-%s", runID) // This now consumes from enriched
-
-	datasetID := fmt.Sprintf("device_data_analytics_%s", runID)
-	tableID := fmt.Sprintf("monitor_payloads_%s", runID)
+	bqSubID := fmt.Sprintf("bq-service-sub-%s", runID)
+	datasetID := fmt.Sprintf("enriched_device_analytics_%s", runID)
+	tableID := fmt.Sprintf("enriched_monitor_payloads_%s", runID)
 
 	return &servicemanager.TopLevelConfig{
 		DefaultProjectID: gcpProjectID,
@@ -98,51 +97,48 @@ func buildTestServicesDefinition(runID, gcpProjectID string) *servicemanager.Top
 			"loadtest": {ProjectID: gcpProjectID},
 		},
 		Services: []servicemanager.ServiceSpec{
-			{Name: "ingestion-service", ServiceAccount: "ingestion-sa@your-gcp-project.iam.gserviceaccount.com"},
-			{Name: "enrichment-service", ServiceAccount: "enrichment-sa@your-gcp-project.iam.gserviceaccount.com"}, // New service
-			{Name: "analysis-service", ServiceAccount: "analysis-sa@your-gcp-project.iam.gserviceaccount.com"},
+			{Name: "ingestion-service"},
+			{Name: "enrichment-service"},
+			{Name: "bq-writer-service"},
 		},
-		Dataflows: []servicemanager.DataflowSpec{
+		Dataflows: []servicemanager.ResourceGroup{
 			{
-				Name:        dataflowName,
-				Description: "Ephemeral dataflow for the cloud load test with enrichment.",
-				Services:    []string{"ingestion-service", "enrichment-service", "analysis-service"}, // All services
+				Name:         dataflowName,
+				Description:  "Ephemeral dataflow for the enriched cloud load test.",
+				ServiceNames: []string{"ingestion-service", "enrichment-service", "bq-writer-service"},
 				Lifecycle: &servicemanager.LifecyclePolicy{
 					Strategy:            servicemanager.LifecycleStrategyEphemeral,
-					KeepResourcesOnTest: *keepDataset, // Set from the command-line flag
+					KeepResourcesOnTest: *keepEnrichedDataset,
 				},
-			},
-		},
-		Resources: servicemanager.ResourcesSpec{
-			MessagingTopics: []servicemanager.MessagingTopicConfig{
-				{Name: rawTopicID, ProducerService: "ingestion-service"},       // Ingestion outputs here
-				{Name: enrichedTopicID, ProducerService: "enrichment-service"}, // Enrichment outputs here
-			},
-			MessagingSubscriptions: []servicemanager.MessagingSubscriptionConfig{
-				{Name: enrichmentSubID, Topic: rawTopicID, ConsumerService: "enrichment-service"},  // Enrichment consumes raw
-				{Name: analysisSubID, Topic: enrichedTopicID, ConsumerService: "analysis-service"}, // Analysis consumes enriched
-			},
-			BigQueryDatasets: []servicemanager.BigQueryDataset{
-				{Name: datasetID, Description: "Temp dataset for load test"},
-			},
-			BigQueryTables: []servicemanager.BigQueryTable{
-				{
-					Name:              tableID,
-					Dataset:           datasetID,
-					AccessingServices: []string{"analysis-service"},
-					SchemaSourceType:  "go_struct",
-					// IMPORTANT: Use the new BigQuery-compatible struct for schema
-					SchemaSourceIdentifier: "github.com/illmade-knight/go-iot-dataflows/gardenmonitor/managedload_test.TestBigQueryEnrichedPayload",
+				Resources: servicemanager.ResourcesSpec{
+					Topics: []servicemanager.TopicConfig{
+						{Name: rawTopicID, ProducerService: "ingestion-service"},
+						{Name: enrichedTopicID, ProducerService: "enrichment-service"},
+					},
+					Subscriptions: []servicemanager.SubscriptionConfig{
+						{Name: enrichmentSubID, Topic: rawTopicID, ConsumerService: "enrichment-service"},
+						{Name: bqSubID, Topic: enrichedTopicID, ConsumerService: "bq-writer-service"},
+					},
+					BigQueryDatasets: []servicemanager.BigQueryDataset{
+						{Name: datasetID, Description: "Temp dataset for enriched load test"},
+					},
+					BigQueryTables: []servicemanager.BigQueryTable{
+						{
+							Name:                   tableID,
+							Dataset:                datasetID,
+							AccessingServices:      []string{"bq-writer-service"},
+							SchemaSourceType:       "go_struct",
+							SchemaSourceIdentifier: "github.com/illmade-knight/go-iot-dataflows/gardenmonitor/managedload_test.EnrichedGardenMonitorReadings",
+						},
+					},
 				},
 			},
 		},
 	}
 }
 
-// TestManagedCloudLoad subjects the entire pipeline to load, using the ServiceManager for setup and teardown.
-func TestManagedCloudLoad(t *testing.T) {
-	t.Setenv("GOOGLE_CLOUD_PROJECT", cloudTestGCPProjectID)
-	// --- 1. Test Setup & Authentication ---
+// TestManagedEnrichedCloudLoad orchestrates the end-to-end test for the enrichment dataflow.
+func TestManagedEnrichedCloudLoad(t *testing.T) {
 	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
 	if projectID == "" {
 		t.Skip("Skipping cloud load test: GOOGLE_CLOUD_PROJECT environment variable must be set.")
@@ -160,455 +156,264 @@ func TestManagedCloudLoad(t *testing.T) {
 		realPubSubClient.Close()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), cloudLoadTestTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), enrichedCloudLoadTestTimeout)
 	defer cancel()
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr, TimeFormat: time.RFC3339})
-	testLogger := log.Logger
 
-	// --- 2. Create Dynamic Services Definition for this Test Run ---
+	// --- 2. Create Dynamic Services Definition ---
 	runID := uuid.New().String()[:8]
-	servicesConfig := buildTestServicesDefinition(runID, projectID)
-
+	servicesConfig := buildEnrichedTestServicesDefinition(runID, projectID)
 	servicesDef, err := servicemanager.NewInMemoryServicesDefinition(servicesConfig)
 	require.NoError(t, err)
 
-	// Register all relevant Go structs for BigQuery schema generation
 	schemaRegistry := make(map[string]interface{})
-	schemaRegistry["github.com/illmade-knight/go-iot/pkg/types.GardenMonitorReadings"] = types.GardenMonitorReadings{}
-	schemaRegistry["github.com/illmade-knight/go-iot-dataflows/gardenmonitor/enrich.EnrichedMessage"] = enrichment.EnrichedMessage{}
-	schemaRegistry["github.com/illmade-knight/go-iot-dataflows/gardenmonitor/managedload_test.TestBigQueryEnrichedPayload"] = TestBigQueryEnrichedPayload{}
+	schemaRegistry["github.com/illmade-knight/go-iot-dataflows/gardenmonitor/managedload_test.EnrichedGardenMonitorReadings"] = EnrichedGardenMonitorReadings{}
 
 	// --- 3. Use ServiceManager to Provision Infrastructure ---
-	log.Info().Str("runID", runID).Msg("Initializing ServiceManager to provision dataflow...")
-	serviceManager, err := servicemanager.NewServiceManager(ctx, servicesDef, "loadtest", schemaRegistry, testLogger)
+	log.Info().Str("runID", runID).Msg("Initializing ServiceManager for ENRICHED dataflow...")
+	serviceManager, err := servicemanager.NewServiceManager(ctx, servicesDef, "loadtest", schemaRegistry, log.Logger)
 	require.NoError(t, err)
 
 	dataflowName := servicesConfig.Dataflows[0].Name
-	provisioned, err := serviceManager.SetupDataflow(ctx, "loadtest", dataflowName)
-	require.NoError(t, err, "ServiceManager.SetupDataflow failed")
+	_, err = serviceManager.SetupDataflow(ctx, "loadtest", dataflowName)
+	require.NoError(t, err, "ServiceManager.SetupDataflow failed for enriched flow")
 
 	t.Cleanup(func() {
-		// Use a new, independent context for cleanup to ensure it runs
-		// even if the main test context times out.
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cleanupCancel()
-		log.Info().Str("runID", runID).Msg("Test finished. Tearing down dataflow resources...")
+		log.Info().Str("runID", runID).Msg("Tearing down ENRICHED dataflow resources...")
 		teardownErr := serviceManager.TeardownDataflow(cleanupCtx, "loadtest", dataflowName)
 		assert.NoError(t, teardownErr, "ServiceManager.TeardownDataflow failed")
 	})
 
-	// --- 4. Get Resource Names from the Provisioning Result ---
-	log.Info().Msg("Getting resource names from the provisioned resources result...")
+	// --- 4. Get Resource Names ---
+	log.Info().Msg("Getting ENRICHED resource names from the service definition...")
+	dataflowSpec, err := servicesDef.GetDataflow(dataflowName)
+	require.NoError(t, err)
+	rawTopicID := dataflowSpec.Resources.Topics[0].Name
+	enrichedTopicID := dataflowSpec.Resources.Topics[1].Name
+	enrichmentSubID := dataflowSpec.Resources.Subscriptions[0].Name
+	bqSubID := dataflowSpec.Resources.Subscriptions[1].Name
+	datasetID := dataflowSpec.Resources.BigQueryTables[0].Dataset
+	tableID := dataflowSpec.Resources.BigQueryTables[0].Name
+	log.Info().Str("rawTopic", rawTopicID).Str("enrichedTopic", enrichedTopicID).Str("enrichmentSub", enrichmentSubID).Str("bqSub", bqSubID).Msg("Using Pub/Sub resources")
+	log.Info().Str("dataset", datasetID).Str("table", tableID).Msg("Using BigQuery resources")
 
-	require.NotEmpty(t, provisioned.BigQueryTables, "Provisioning must return a BigQueryConfig table")
-	datasetID := provisioned.BigQueryTables[0].Dataset
-	tableID := provisioned.BigQueryTables[0].Name
-
-	log.Info().Str("dataset", datasetID).Str("table", tableID).Msg("Using BigQueryConfig resources")
-
-	// --- 5. Start Local Services & Load Generator ---
-	log.Info().Msg("LoadTest: Setting up Mosquitto container...")
+	// --- 5. Start Emulators and Services ---
+	log.Info().Msg("Setting up Mosquitto and Redis emulators...")
 	mqttConnections := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
+	redisConn := emulators.SetupRedisContainer(t, ctx, emulators.GetDefaultRedisImageContainer())
 
-	// Start Ingestion Service (MQTT to Raw Pub/Sub)
+	// Use a real Firestore client
+	firestoreClient, err := firestore.NewClient(ctx, projectID)
+	require.NoError(t, err, "Failed to create real Firestore client")
+	defer firestoreClient.Close()
+	deviceIDs, deviceMetadata := seedDeviceMetadata(t, ctx, firestoreClient, firestoreCollection, enrichedLoadTestNumDevices)
+
+	// Start the microservices in pipeline order
 	ingestionService, mqttServer := startIngestionService(t, ctx, projectID, mqttConnections.EmulatorAddress, rawTopicID)
 	defer mqttServer.Shutdown()
+	go func() {
+		for e := range ingestionService.Err() {
+			log.Error().Err(e).Msg("Error from ingestion service")
+		}
+	}()
 
-	// Start Enrichment Service (Raw Pub/Sub to Enriched Pub/Sub)
-	enrichmentService, enrichServer := startEnrichmentService(t, ctx, projectID, rawTopicID, enrichmentSubID, enrichedTopicID)
-	defer enrichServer.Shutdown()
+	_, enrichmentServer := startEnrichmentService(t, ctx, projectID, enrichmentSubID, enrichedTopicID, redisConn.EmulatorAddress)
+	defer enrichmentServer.Shutdown()
 
-	// Start BigQuery Processing Service (Enriched Pub/Sub to BigQuery)
-	bqProcessingService, bqServer := startBQProcessingService(t, ctx, projectID, enrichedTopicID, analysisSubID, datasetID, tableID)
+	_, bqServer := startEnrichedBQProcessingService(t, ctx, projectID, bqSubID, datasetID, tableID)
 	defer bqServer.Shutdown()
 
-	var processingErrors []error
-	var errMu sync.Mutex
+	log.Info().Msg("Pausing to allow services to start and connect...")
+	time.Sleep(15 * time.Second)
 
-	// Goroutine to capture errors from ingestion service
-	go func() {
-		for err := range ingestionService.Err() {
-			errMu.Lock()
-			processingErrors = append(processingErrors, err)
-			errMu.Unlock()
-			log.Error().Err(err).Msg("Received processing error from ingestion service")
-		}
-	}()
-
-	// Goroutine to capture errors from enrichment service
-	go func() {
-		// Assuming ProcessingService provides an error channel. If not, this part needs adjustment.
-		// For now, we'll just check if the service shuts down prematurely.
-		select {
-		case <-enrichmentService.Done(): // Assuming ProcessingService has a Done() channel
-			log.Info().Msg("Enrichment service completed its run (expected during graceful shutdown).")
-		case <-ctx.Done():
-			log.Warn().Msg("Enrichment service context cancelled before graceful shutdown.")
-		}
-	}()
-
-	// Goroutine to capture errors from BQ processing service
-	go func() {
-		// Assuming ProcessingService provides an error channel. If not, this part needs adjustment.
-		select {
-		case <-bqProcessingService.Done(): // Assuming ProcessingService has a Done() channel
-			log.Info().Msg("BigQuery processing service completed its run (expected during graceful shutdown).")
-		case <-ctx.Done():
-			log.Warn().Msg("BigQuery processing service context cancelled before graceful shutdown.")
-		}
-	}()
-
-	log.Info().Msg("LoadTest: Pausing to allow services to start and connect...")
-	time.Sleep(10 * time.Second) // Give services time to initialize
-
-	log.Info().Msg("LoadTest: Configuring and starting load generator...")
+	// --- 6. Start Load Generator ---
+	log.Info().Msg("Configuring and starting load generator...")
 	loadgenLogger := log.With().Str("service", "load-generator").Logger()
 	loadgenClient := loadgen.NewMqttClient(mqttConnections.EmulatorAddress, testMqttTopicPattern, 1, loadgenLogger)
-	devices := make([]*loadgen.Device, loadTestNumDevices)
-	deviceIDs := make([]string, loadTestNumDevices)
-
-	// In-memory cache for the test's enrichment service
-	testDeviceCache := enrich.NewInMemoryDeviceMetadataCache()
-	testDeviceCache.AddDevice("load-test-device-0", "client-A", "location-X", "type-temp")
-	testDeviceCache.AddDevice("load-test-device-1", "client-A", "location-Y", "type-pressure")
-	// Add more devices to the test cache as needed for load test to ensure enrichment happens for all.
-	for i := 0; i < loadTestNumDevices; i++ {
-		deviceID := fmt.Sprintf("load-test-device-%d", i)
-		deviceIDs[i] = deviceID
-		payloadGenerator := &gardenMonitorPayloadGenerator{} // This generates types.GardenMonitorReadings
+	devices := make([]*loadgen.Device, enrichedLoadTestNumDevices)
+	for i := 0; i < enrichedLoadTestNumDevices; i++ {
+		payloadGenerator := &gardenMonitorPayloadGenerator{}
 		devices[i] = &loadgen.Device{
-			ID:               deviceID,
-			MessageRate:      loadTestRatePerDevice,
+			ID:               deviceIDs[i],
+			MessageRate:      enrichedLoadTestRatePerDevice,
 			PayloadGenerator: payloadGenerator,
-		}
-		// Populate the in-memory cache for all load-test devices
-		if i%2 == 0 { // Example: half devices get one location, half another
-			testDeviceCache.AddDevice(deviceID, fmt.Sprintf("client-%d", i), "location-even", "category-even")
-		} else {
-			testDeviceCache.AddDevice(deviceID, fmt.Sprintf("client-%d", i), "location-odd", "category-odd")
 		}
 	}
 
-	// Inject the test cache's fetcher into the enrichment service
-	// This requires modifying the enrichment service's NewTestMessageEnricher to accept a pre-configured fetcher.
-	// For simplicity in this test, we are setting a global or relying on how startEnrichmentService gets its fetcher.
-	// The current `startEnrichmentService` creates its own `InMemoryDeviceMetadataCache`. This is good for isolation.
-
 	loadGenerator := loadgen.NewLoadGenerator(loadgenClient, devices, loadgenLogger)
-	err = loadGenerator.Run(ctx, loadTestDuration)
+
+	populateFirestoreFromLoadgenDevices(t, ctx, firestoreClient, firestoreCollection, devices, 3)
+
+	err = loadGenerator.Run(ctx, enrichedLoadTestDuration)
 	if err != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		require.NoError(t, err, "Load generator returned an unexpected error")
 	}
 
-	// --- 6. Verification ---
-	log.Info().Msg("Load generation complete. Verifying results in BigQueryConfig...")
-	expectedMessages := int(float64(loadTestNumDevices) * loadTestRatePerDevice * loadTestDuration.Seconds())
-	successThreshold := int(float64(expectedMessages) * loadTestSuccessPercent)
+	// --- 7. Verification ---
+	log.Info().Msg("Load generation complete. Verifying results in BigQuery...")
+	expectedMessages := int(float64(enrichedLoadTestNumDevices) * enrichedLoadTestRatePerDevice * enrichedLoadTestDuration.Seconds())
+	successThreshold := int(float64(expectedMessages) * enrichedSuccessPercent)
 
 	bqClient, err := bigquery.NewClient(ctx, projectID)
 	require.NoError(t, err)
 	defer bqClient.Close()
 
-	var lastRowCount int64 = -1 // Use -1 to indicate the first run
-	var pollsWithNoChange int
-	const maxPollsWithNoChange = 3 // Number of stable polls before we assume completion
-
-	verificationCtx, verificationCancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer verificationCancel()
-	tick := time.NewTicker(15 * time.Second)
-	defer tick.Stop()
-
-VerificationLoop:
-	for {
-		select {
-		case <-verificationCtx.Done():
-			t.Fatalf("Test timed out waiting for BigQueryConfig results. Last count: %d, Threshold: %d", lastRowCount, successThreshold)
-		case <-tick.C:
-			currentRowCount, err := getRowCount(verificationCtx, bqClient, datasetID, tableID)
-			if err != nil {
-				log.Warn().Err(err).Msg("Polling query for row count failed")
-				continue
-			}
-
-			log.Info().Int64("current_count", currentRowCount).Int64("last_count", lastRowCount).Int("stable_polls", pollsWithNoChange).Msg("Polling BQ count")
-
-			if currentRowCount == lastRowCount {
-				pollsWithNoChange++
-			} else {
-				pollsWithNoChange = 0
-				lastRowCount = currentRowCount
-			}
-
-			if pollsWithNoChange >= maxPollsWithNoChange {
-				if lastRowCount >= int64(successThreshold) {
-					log.Info().Msg("Row count has stabilized and meets the success threshold. Verification successful!")
-					break VerificationLoop
-				} else {
-					t.Fatalf("Test failed: Row count stabilized at %d, which is below the success threshold of %d.", lastRowCount, successThreshold)
-				}
-			}
+	// Poll BigQuery until the row count stabilizes and meets the threshold
+	require.Eventually(t, func() bool {
+		count, err := getRowCount(ctx, bqClient, datasetID, tableID)
+		if err != nil {
+			log.Warn().Err(err).Msg("Polling query for row count failed")
+			return false
 		}
-	}
+		log.Info().Int64("current_count", count).Int("threshold", successThreshold).Msg("Polling BQ count for enriched data")
+		return count >= int64(successThreshold)
+	}, 4*time.Minute, 20*time.Second, "Timeout waiting for enriched data to land in BigQuery")
 
-	// Final check outside the loop
-	finalCount, err := getRowCount(verificationCtx, bqClient, datasetID, tableID)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, finalCount, int64(successThreshold), "Final count in BQ (%d) is less than success threshold (%d)", finalCount, successThreshold)
-
-	// Optional: Query BigQuery to verify enriched data
-	log.Info().Msg("Performing sanity check on enriched data in BigQuery...")
-	query := bqClient.Query(fmt.Sprintf("SELECT COUNT(*) FROM `%s.%s` WHERE clientID IS NOT NULL AND locationID IS NOT NULL", datasetID, tableID))
-	it, err := query.Read(ctx)
-	require.NoError(t, err)
-	var count struct{ Count int64 }
-	err = it.Next(&count)
-	require.NoError(t, err)
-	log.Info().Int64("enriched_row_count", count.Count).Msg("Count of enriched rows in BigQuery.")
-	assert.GreaterOrEqual(t, count.Count, int64(loadTestNumDevices/2), "Expected at least half of messages to be enriched") // Adjust as per your enrichment logic
-
-	// --- 7. Post-Test Data Manipulation (Conditional) ---
-	if *keepDataset {
-		log.Info().Msg("'-keep-dataset' flag is set. Retaining dataset for demos and respacing timestamps...")
-		respaceTimestampsForDemo(t, ctx, bqClient, projectID, datasetID, tableID, deviceIDs)
-	}
-
-	// --- 8. Final Error Check ---
-	errMu.Lock()
-	defer errMu.Unlock()
-	assert.Empty(t, processingErrors, "Should be no processing errors from the ingestion service")
+	// Final verification of data content
+	verifyEnrichedData(t, ctx, bqClient, projectID, datasetID, tableID, deviceMetadata)
 }
 
-// --- Helper Functions ---
+// --- Service Start-up Helpers ---
 
-func getRowCount(ctx context.Context, client *bigquery.Client, datasetID, tableID string) (int64, error) {
-	queryString := fmt.Sprintf("SELECT COUNT(*) as count FROM `%s.%s`", datasetID, tableID)
-	query := client.Query(queryString)
-	it, err := query.Read(ctx)
-	if err != nil {
-		return 0, err
-	}
-	var row struct {
-		Count int64 `bigquery:"count"`
-	}
-	if err := it.Next(&row); err != nil {
-		if errors.Is(err, iterator.Done) {
-			return 0, nil // No rows found, which is a valid count of 0
-		}
-		return 0, err
-	}
-	return row.Count, nil
-}
-
-func startIngestionService(t *testing.T, ctx context.Context, projectID, mqttBrokerURL, topicID string) (*mqttconverter.IngestionService, *mqinit.Server) {
+// startEnrichmentService configures and starts the enrichment microservice.
+func startEnrichmentService(t *testing.T, ctx context.Context, projectID, subID, topicID, redisAddr string) (*messagepipeline.ProcessingService[eninit.TestEnrichedMessage], *eninit.Server) {
 	t.Helper()
-	mqttCfg := &mqinit.Config{
-		LogLevel: "info", HTTPPort: cloudTestMqttHTTPPort, ProjectID: projectID,
-		Publisher: struct {
-			TopicID         string `mapstructure:"topic_id"`
-			CredentialsFile string `mapstructure:"credentials_file"`
-		}{TopicID: topicID},
-		MQTT:    mqttconverter.MQTTClientConfig{BrokerURL: mqttBrokerURL, Topic: testMqttTopicPattern, ClientIDPrefix: testMqttClientIDPrefix},
-		Service: mqttconverter.IngestionServiceConfig{InputChanCapacity: 1000, NumProcessingWorkers: 20},
+	cfg := &eninit.Config{
+		LogLevel:  "debug",
+		HTTPPort:  ":9094",
+		ProjectID: projectID,
+		Consumer: struct {
+			SubscriptionID string `mapstructure:"subscription_id"`
+		}{SubscriptionID: subID},
+		Producer: &messagepipeline.GooglePubsubProducerConfig{
+			ProjectID:  projectID,
+			TopicID:    topicID,
+			BatchDelay: 50 * time.Millisecond,
+		},
+		CacheConfig: struct {
+			RedisConfig     device.RedisConfig             `mapstructure:"redis_config"`
+			FirestoreConfig *device.FirestoreFetcherConfig `mapstructure:"firestore_config"`
+		}{
+			RedisConfig:     device.RedisConfig{Addr: redisAddr, CacheTTL: 5 * time.Minute},
+			FirestoreConfig: &device.FirestoreFetcherConfig{ProjectID: projectID, CollectionName: firestoreCollection},
+		},
+		ProcessorConfig: struct {
+			NumWorkers   int           `mapstructure:"num_workers"`
+			BatchSize    int           `mapstructure:"batch_size"`
+			FlushTimeout time.Duration `mapstructure:"flush_timeout"`
+		}{NumWorkers: 5},
 	}
-	logger := log.With().Str("service", "mqtt-ingestion").Logger()
 
-	// Create a shared Pub/Sub client for this service
-	pubsubClient, err := pubsub.NewClient(ctx, projectID, pubsub.WithEmulatorSettings(os.Getenv("PUBSUB_EMULATOR_HOST")))
-	require.NoError(t, err)
-	// Important: The client is closed by the service's Stop method or defer
+	logger := log.With().Str("service", "enrichment").Logger()
 
-	publisher, err := mqttconverter.NewGooglePubsubPublisher(pubsubClient, // Pass the client
-		mqttconverter.GooglePubsubPublisherConfig{ProjectID: mqttCfg.ProjectID, TopicID: mqttCfg.Publisher.TopicID}, logger)
+	// Build the full chained fetcher with a real Firestore client and Redis emulator
+	redisClient := redis.NewClient(&redis.Options{Addr: cfg.CacheConfig.RedisConfig.Addr})
+	firestoreClient, err := firestore.NewClient(ctx, cfg.ProjectID)
+	require.NoError(t, err, "Failed to create real Firestore client for enrichment service")
+
+	sourceFetcher, err := device.NewGoogleDeviceMetadataFetcher(firestoreClient, cfg.CacheConfig.FirestoreConfig, logger)
 	require.NoError(t, err)
-	service := mqttconverter.NewIngestionService(publisher, nil, logger, mqttCfg.Service, mqttCfg.MQTT)
-	server := mqinit.NewServer(mqttCfg, service, logger)
+
+	chainedFetcher, cleanup, err := device.NewChainedFetcher(ctx, &cfg.CacheConfig.RedisConfig, sourceFetcher, logger)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		cleanup()
+		redisClient.Close()
+	})
+
+	// Build the pipeline
+	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID)
+	require.NoError(t, err)
+
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(&messagepipeline.GooglePubsubConsumerConfig{ProjectID: cfg.ProjectID, SubscriptionID: cfg.Consumer.SubscriptionID}, psClient, logger)
+	require.NoError(t, err)
+	producer, err := messagepipeline.NewGooglePubsubProducer[eninit.TestEnrichedMessage](psClient, cfg.Producer, logger)
+	require.NoError(t, err)
+	transformer := eninit.NewTestMessageEnricher(chainedFetcher, logger)
+	service, err := messagepipeline.NewProcessingService(cfg.ProcessorConfig.NumWorkers, consumer, producer, transformer, logger)
+	require.NoError(t, err)
+
+	server := eninit.NewServer(cfg, service, logger)
 	go func() {
 		if err := server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error().Err(err).Msg("Ingestion server failed during test execution")
+			t.Errorf("Enrichment server failed: %v", err)
 		}
 	}()
 	return service, server
 }
 
-// startEnrichmentService initializes and starts the enrichment microservice.
-func startEnrichmentService(t *testing.T, ctx context.Context, projectID, inputTopicID, inputSubID, outputTopicID string) (*messagepipeline.ProcessingService[enrich.TestEnrichedMessage], *eninit.Server) {
-	t.Helper()
-
-	// Configuration for the enrichment service (similar to runenrichment.go main function)
-	enrichCfg := &eninit.Config{
-		LogLevel: "info", HTTPPort: cloudTestEnrichHTTPPort, ProjectID: projectID,
-		Consumer: struct {
-			SubscriptionID  string `mapstructure:"subscription_id"`
-			CredentialsFile string `mapstructure:"credentials_file"`
-		}{SubscriptionID: inputSubID},
-		Producer: &messagepipeline.GooglePubsubProducerConfig{
-			ProjectID:  projectID,
-			TopicID:    outputTopicID,
-			BatchSize:  100,
-			BatchDelay: 100 * time.Millisecond,
-		},
-		CacheConfig: eninit.CacheConfig{ // Define a mock cache config for the test
-			FirestoreConfig: device.FirestoreConfig{CollectionID: "test-devices"},                  // This won't be used, but needed for constructor
-			RedisConfig:     device.RedisConfig{Addr: "localhost:6379", CacheTTL: 5 * time.Minute}, // Mock Redis
-		},
-	}
-
-	enrichLogger := log.With().Str("service", "enrichment-processor").Logger()
-
-	// Create a shared Pub/Sub client for the enrichment service
-	pubsubClient, err := pubsub.NewClient(ctx, projectID, pubsub.WithEmulatorSettings(os.Getenv("PUBSUB_EMULATOR_HOST")))
-	require.NoError(t, err)
-	// Important: The client is closed by the service's Stop method or defer
-
-	// Create Pub/Sub consumer for enrichment service
-	consumerCfg := &messagepipeline.GooglePubsubConsumerConfig{
-		ProjectID:      projectID,
-		SubscriptionID: inputSubID,
-	}
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, pubsubClient, enrichLogger)
-	require.NoError(t, err)
-
-	// Create Pub/Sub producer for enrichment service
-	producer, err := messagepipeline.NewGooglePubsubProducer[enrich.TestEnrichedMessage](pubsubClient, enrichCfg.Producer, enrichLogger)
-	require.NoError(t, err)
-
-	// Use the in-memory device metadata cache for testing
-	metadataCache := enrich.NewInMemoryDeviceMetadataCache()
-	// Add a few known devices to the cache for successful enrichment during load test
-	metadataCache.AddDevice("load-test-device-0", "client-A", "location-X", "type-temp")
-	metadataCache.AddDevice("load-test-device-1", "client-B", "location-Y", "type-humidity")
-	// Populate for all devices expected in load test
-	for i := 0; i < loadTestNumDevices; i++ {
-		deviceID := fmt.Sprintf("load-test-device-%d", i)
-		if i%2 == 0 {
-			metadataCache.AddDevice(deviceID, fmt.Sprintf("client-E%d", i), "loc-E", "cat-E")
-		} else {
-			metadataCache.AddDevice(deviceID, fmt.Sprintf("client-O%d", i), "loc-O", "cat-O")
-		}
-	}
-
-	// Create the MessageTransformer (enricher)
-	enricher := enrich.NewTestMessageEnricher(metadataCache.Fetcher(), enrichLogger)
-
-	// Create the Processing Service for enrichment
-	processingService, err := messagepipeline.NewProcessingService(
-		2, // Number of workers for enrichment
-		consumer,
-		producer,
-		enricher,
-		enrichLogger,
-	)
-	require.NoError(t, err)
-
-	// Create and start the HTTP server for the enrichment service (if applicable)
-	// Note: The `eninit.NewServer` might expect a Config struct and the ProcessingService.
-	// We'll create a minimal config here.
-	server := eninit.NewServer(enrichCfg, processingService, enrichLogger)
-	go func() {
-		if srvErr := server.Start(); srvErr != nil && !errors.Is(srvErr, http.ErrServerClosed) {
-			t.Errorf("Enrichment server failed: %v", srvErr)
-		}
-	}()
-	return processingService, server
-}
-
-func startBQProcessingService(t *testing.T, ctx context.Context, gcpProjectID, inputTopicID, subID, datasetID, tableID string) (*messagepipeline.ProcessingService[TestBigQueryEnrichedPayload], *bqinit.Server) {
+// startEnrichedBQProcessingService starts the service that consumes enriched messages and writes them to BQ.
+func startEnrichedBQProcessingService(t *testing.T, ctx context.Context, gcpProjectID, subID, datasetID, tableID string) (*messagepipeline.ProcessingService[EnrichedGardenMonitorReadings], *bqinit.Server[EnrichedGardenMonitorReadings]) {
 	t.Helper()
 	bqCfg := &bqinit.Config{
 		LogLevel:  "info",
-		HTTPPort:  cloudTestBqHTTPPort,
+		HTTPPort:  ":9095",
 		ProjectID: gcpProjectID,
-		Consumer: struct {
-			SubscriptionID  string `mapstructure:"subscription_id"`
-			CredentialsFile string `mapstructure:"credentials_file"`
-		}{SubscriptionID: subID}, // Consumes from the enriched topic now
+		Consumer:  bqinit.Consumer{SubscriptionID: subID},
 		BigQueryConfig: bqstore.BigQueryDatasetConfig{
-			ProjectID: gcpProjectID,
-			DatasetID: datasetID,
-			TableID:   tableID,
+			ProjectID: gcpProjectID, DatasetID: datasetID, TableID: tableID,
 		},
 		BatchProcessing: struct {
 			bqstore.BatchInserterConfig `mapstructure:"datasetup"`
 			NumWorkers                  int `mapstructure:"num_workers"`
 		}{
-			BatchInserterConfig: bqstore.BatchInserterConfig{
-				BatchSize:    5,
-				FlushTimeout: 10 * time.Second,
-			},
-			NumWorkers: 2,
+			BatchInserterConfig: bqstore.BatchInserterConfig{BatchSize: 10, FlushTimeout: 10 * time.Second},
+			NumWorkers:          2,
 		},
 	}
-	bqLogger := log.With().Str("service", "bq-processor").Logger()
 
-	// Create a shared Pub/Sub client for the BQ service
-	pubsubClient, err := pubsub.NewClient(ctx, gcpProjectID, pubsub.WithEmulatorSettings(os.Getenv("PUBSUB_EMULATOR_HOST")))
-	require.NoError(t, err)
-	defer pubsubClient.Close() // Make sure client is closed when this helper exits
-
+	bqLogger := log.With().Str("service", "enriched-bq-processor").Logger()
 	bqClient, err := bigquery.NewClient(ctx, gcpProjectID)
+	require.NoError(t, err)
+	psClient, err := pubsub.NewClient(ctx, gcpProjectID)
 	require.NoError(t, err)
 
 	bqConsumer, err := messagepipeline.NewGooglePubsubConsumer(&messagepipeline.GooglePubsubConsumerConfig{
-		ProjectID:      bqCfg.ProjectID,
-		SubscriptionID: bqCfg.Consumer.SubscriptionID,
-	}, pubsubClient, bqLogger) // Pass the Pub/Sub client
+		ProjectID: bqCfg.ProjectID, SubscriptionID: bqCfg.Consumer.SubscriptionID,
+	}, psClient, bqLogger)
 	require.NoError(t, err)
 
-	// Transformer for BigQuery: from EnrichedMessage to TestBigQueryEnrichedPayload
-	// This transformer will extract the necessary fields from the EnrichedMessage
-	// and flatten them into the structure expected by BigQuery.
-	bqTransformer := func(msg types.ConsumedMessage) (*TestBigQueryEnrichedPayload, bool, error) {
-		// First, unmarshal the ConsumedMessage.Payload into an enrich.TestEnrichedMessage
-		var enrichedMsgFromPubsub enrich.TestEnrichedMessage
-		err := json.Unmarshal(msg.Payload, &enrichedMsgFromPubsub)
-		if err != nil {
-			bqLogger.Error().Err(err).Str("msg_id", msg.ID).Msg("Failed to unmarshal enriched message for BQ, skipping.")
-			return nil, true, nil // Skip on unmarshal error
+	batchInserter, err := bqstore.NewBigQueryBatchProcessor[EnrichedGardenMonitorReadings](ctx, bqClient, &bqCfg.BatchProcessing.BatchInserterConfig, &bqCfg.BigQueryConfig, bqLogger)
+	require.NoError(t, err)
+
+	// This transformer maps the enriched Pub/Sub message to the BigQuery schema.
+	transformer := func(msg types.ConsumedMessage) (*EnrichedGardenMonitorReadings, bool, error) {
+		var enrichedMsg eninit.TestEnrichedMessage
+		if err := json.Unmarshal(msg.Payload, &enrichedMsg); err != nil {
+			return nil, false, fmt.Errorf("failed to unmarshal enriched message: %w", err)
 		}
 
-		// Now, extract the original GardenMonitorReadings payload
-		var originalReadings types.GardenMonitorReadings
-		if enrichedMsgFromPubsub.OriginalPayload != nil {
-			err = json.Unmarshal(enrichedMsgFromPubsub.OriginalPayload, &originalReadings)
-			if err != nil {
-				bqLogger.Error().Err(err).Str("msg_id", msg.ID).Msg("Failed to unmarshal original payload within enriched message for BQ, skipping.")
-				return nil, true, nil // Skip if original payload can't be unmarshaled
-			}
+		var originalPayload types.GardenMonitorReadings
+		if err := json.Unmarshal(enrichedMsg.OriginalPayload, &originalPayload); err != nil {
+			return nil, false, fmt.Errorf("failed to unmarshal original payload from enriched message: %w", err)
 		}
 
-		// Create the flattened BigQuery payload
-		bqPayload := &TestBigQueryEnrichedPayload{
-			Value:       originalReadings.Value,
-			Timestamp:   originalReadings.Timestamp,
-			ClientID:    enrichedMsgFromPubsub.ClientID,
-			LocationID:  enrichedMsgFromPubsub.LocationID,
-			Category:    enrichedMsgFromPubsub.Category,
-			MessageID:   msg.ID, // Use the Pub/Sub message ID
-			PublishTime: msg.PublishTime,
+		bqRow := &EnrichedGardenMonitorReadings{
+			DE:           originalPayload.DE,
+			SIM:          originalPayload.SIM,
+			RSSI:         originalPayload.RSSI,
+			Version:      originalPayload.Version,
+			Sequence:     originalPayload.Sequence,
+			Battery:      originalPayload.Battery,
+			Temperature:  originalPayload.Temperature,
+			Humidity:     originalPayload.Humidity,
+			SoilMoisture: originalPayload.SoilMoisture,
+			WaterFlow:    originalPayload.WaterFlow,
+			WaterQuality: originalPayload.WaterQuality,
+			TankLevel:    originalPayload.TankLevel,
+			AmbientLight: originalPayload.AmbientLight,
+			Timestamp:    enrichedMsg.PublishTime, // Use publish time for BQ
+			ClientID:     enrichedMsg.ClientID,
+			LocationID:   enrichedMsg.LocationID,
+			Category:     enrichedMsg.Category,
 		}
-
-		// Handle cases where original DeviceInfo was present in the raw message
-		if enrichedMsgFromPubsub.OriginalInfo != nil {
-			bqPayload.OriginalUID = enrichedMsgFromPubsub.OriginalInfo.UID
-		}
-
-		bqLogger.Debug().Str("msg_id", msg.ID).Msg("Transformed enriched message to BQ payload.")
-		return bqPayload, false, nil
+		return bqRow, false, nil
 	}
 
-	// Use the new, single convenience constructor for BigQueryBatchProcessor,
-	// using our new TestBigQueryEnrichedPayload type.
-	batchInserter, err := bqstore.NewBigQueryBatchProcessor[TestBigQueryEnrichedPayload](ctx, bqClient, &bqCfg.BatchProcessing.BatchInserterConfig, &bqCfg.BigQueryConfig, bqLogger)
-	require.NoError(t, err)
-
-	// Use the new service constructor with our custom transformer.
-	processingService, err := messagepipeline.NewProcessingService(
-		bqCfg.BatchProcessing.NumWorkers,
-		bqConsumer,
-		batchInserter,
-		bqTransformer, // Use the new transformer
-		bqLogger,
-	)
+	// This now uses the generic NewBigQueryService
+	processingService, err := bqstore.NewBigQueryService[EnrichedGardenMonitorReadings](bqCfg.BatchProcessing.NumWorkers, bqConsumer, batchInserter, transformer, bqLogger)
 	require.NoError(t, err)
 
 	bqServer := bqinit.NewServer(bqCfg, processingService, bqLogger)
@@ -621,88 +426,61 @@ func startBQProcessingService(t *testing.T, ctx context.Context, gcpProjectID, i
 	return processingService, bqServer
 }
 
-// gardenMonitorPayloadGenerator implements loadgen.PayloadGenerator for GardenMonitorReadings.
-type gardenMonitorPayloadGenerator struct{}
+// --- Data Seeding and Verification Helpers ---
 
-func (g *gardenMonitorPayloadGenerator) GeneratePayload(deviceID string) ([]byte, error) {
-	payload := types.GardenMonitorReadings{
-		DeviceID:  deviceID,
-		Value:     float64(time.Now().UnixNano()%1000) / 10.0, // Example value
-		Timestamp: time.Now().UTC(),
+// seedDeviceMetadata creates mock device metadata in Firestore for the test.
+func seedDeviceMetadata(t *testing.T, ctx context.Context, client *firestore.Client, collection string, numDevices int) ([]string, map[string]map[string]interface{}) {
+	t.Helper()
+	deviceIDs := make([]string, numDevices)
+	metadata := make(map[string]map[string]interface{})
+	for i := 0; i < numDevices; i++ {
+		deviceID := fmt.Sprintf("enriched-device-%d", i)
+		deviceIDs[i] = deviceID
+		docData := map[string]interface{}{
+			"clientID":       fmt.Sprintf("client-%d", 100+i),
+			"locationID":     fmt.Sprintf("location-%d", 200+i),
+			"deviceCategory": "garden-sensor-pro",
+		}
+		metadata[deviceID] = docData
+		_, err := client.Collection(collection).Doc(deviceID).Set(ctx, docData)
+		require.NoError(t, err, "Failed to seed device metadata in Firestore")
 	}
-	return json.Marshal(payload)
+	log.Info().Int("count", numDevices).Msg("Seeded device metadata in Firestore")
+	return deviceIDs, metadata
 }
 
-// respaceTimestampsForDemo adjusts timestamps in BigQuery for better demo visualization.
-// (Original helper, kept for completeness)
-func respaceTimestampsForDemo(t *testing.T, ctx context.Context, client *bigquery.Client, projectID, datasetID, tableID string, deviceIDs []string) {
+// verifyEnrichedData queries BigQuery and asserts that the data was enriched correctly.
+func verifyEnrichedData(t *testing.T, ctx context.Context, bqClient *bigquery.Client, projectID, datasetID, tableID string, expectedMetadata map[string]map[string]interface{}) {
 	t.Helper()
-	log.Info().Msg("Rescaling timestamps for demo...")
-
-	// Fetch all data
-	queryStr := fmt.Sprintf("SELECT * FROM `%s.%s` ORDER BY PublishTime ASC", datasetID, tableID)
-	query := client.Query(queryStr)
+	log.Info().Msg("Verifying content of enriched data in BigQuery...")
+	queryStr := fmt.Sprintf("SELECT uid, client_id, location_id, category FROM `%s.%s.%s` LIMIT 100", projectID, datasetID, tableID)
+	query := bqClient.Query(queryStr)
 	it, err := query.Read(ctx)
 	require.NoError(t, err)
 
-	type TempRow struct {
-		TestBigQueryEnrichedPayload
-		OriginalTimestamp time.Time `bigquery:"publishTime"` // Capture the original
-	}
-	var rows []TempRow
+	rowsVerified := 0
 	for {
-		var row TempRow
+		var row struct {
+			UID      string `bigquery:"uid"`
+			ClientID string `bigquery:"client_id"`
+			Location string `bigquery:"location_id"`
+			Category string `bigquery:"category"`
+		}
 		err := it.Next(&row)
 		if errors.Is(err, iterator.Done) {
 			break
 		}
-		require.NoError(t, err)
-		rows = append(rows, row)
+		require.NoError(t, err, "Failed to iterate BQ results")
+
+		expected, ok := expectedMetadata[row.UID]
+		require.True(t, ok, "Found a row in BQ with a UID that was not in the test seed data: %s", row.UID)
+
+		assert.Equal(t, expected["clientID"], row.ClientID, "ClientID mismatch for UID %s", row.UID)
+		assert.Equal(t, expected["locationID"], row.Location, "LocationID mismatch for UID %s", row.UID)
+		assert.Equal(t, expected["deviceCategory"], row.Category, "Category mismatch for UID %s", row.UID)
+		rowsVerified++
 	}
 
-	if len(rows) == 0 {
-		log.Warn().Msg("No rows to respace timestamps for.")
-		return
-	}
-
-	// Calculate new timestamps
-	minTime := rows[0].OriginalTimestamp
-	maxTime := rows[len(rows)-1].OriginalTimestamp
-	demoDuration := 5 * time.Minute // Respace to fit in 5 minutes
-
-	if maxTime.Equal(minTime) { // Handle case of all messages arriving at same time
-		log.Warn().Msg("All messages have identical timestamps, cannot respace.")
-		return
-	}
-
-	for i := range rows {
-		// Calculate percentage through original time range
-		timeDiff := float64(rows[i].OriginalTimestamp.Sub(minTime))
-		totalTimeRange := float64(maxTime.Sub(minTime))
-		progress := timeDiff / totalTimeRange
-
-		// Apply that percentage to the new demo duration
-		newTimestamp := minTime.Add(time.Duration(float64(demoDuration) * progress))
-		rows[i].PublishTime = newTimestamp
-		rows[i].Timestamp = newTimestamp // Also update the nested payload timestamp
-	}
-
-	// Delete existing data
-	deleteQuery := fmt.Sprintf("DELETE FROM `%s.%s` WHERE TRUE", datasetID, tableID)
-	job, err := client.Query(deleteQuery).Run(ctx)
-	require.NoError(t, err)
-	status, err := job.Wait(ctx)
-	require.NoError(t, err)
-	require.Nil(t, status.Errors)
-
-	// Insert respaced data back
-	inserter := client.Dataset(datasetID).Table(tableID).Inserter()
-	insertRows := make([]interface{}, len(rows))
-	for i, r := range rows {
-		insertRows[i] = r.TestBigQueryEnrichedPayload // Insert the payload struct
-	}
-
-	err = inserter.Put(ctx, insertRows)
-	require.NoError(t, err)
-	log.Info().Msg("Timestamps respaced and data re-inserted.")
+	require.Greater(t, rowsVerified, 0, "Verification failed: No rows were found in the BigQuery table to verify.")
+	log.Info().Int("rows_verified", rowsVerified).Msg("Successfully verified content of enriched data.")
 }

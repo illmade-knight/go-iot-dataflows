@@ -139,10 +139,7 @@ func TestE2E_Cloud_MqttToBigQueryFlow(t *testing.T) {
 		LogLevel: "debug",
 		//HTTPPort:  cloudTestBqHTTPPort,
 		ProjectID: projectID,
-		Consumer: struct {
-			SubscriptionID  string `mapstructure:"subscription_id"`
-			CredentialsFile string `mapstructure:"credentials_file"`
-		}{SubscriptionID: subscriptionID},
+		Consumer:  bqinit.Consumer{SubscriptionID: subscriptionID},
 		BigQueryConfig: bqstore.BigQueryDatasetConfig{
 			ProjectID: projectID,
 			DatasetID: datasetID,
@@ -167,10 +164,14 @@ func TestE2E_Cloud_MqttToBigQueryFlow(t *testing.T) {
 	require.NoError(t, err, "Failed to create real BigQueryConfig client")
 	defer bqClient.Close()
 
-	bqConsumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
+	pubsubClient, err := pubsub.NewClient(ctx, projectID)
+	require.NoError(t, err, "Failed to create real pubsub client")
+	defer pubsubClient.Close()
+
+	bqConsumer, err := messagepipeline.NewGooglePubsubConsumer(&messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      bqCfg.ProjectID,
 		SubscriptionID: bqCfg.Consumer.SubscriptionID,
-	}, make([]option.ClientOption, 0), bqLogger)
+	}, pubsubClient, bqLogger)
 	require.NoError(t, err)
 
 	// *** REFACTORED PART: Use the new, single convenience constructor ***

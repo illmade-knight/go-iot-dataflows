@@ -3,6 +3,7 @@
 package main_test
 
 import (
+	"cloud.google.com/go/pubsub"
 	"context"
 	"encoding/json"
 	"errors"
@@ -133,10 +134,7 @@ func TestE2E_MqttToBigQueryFlow(t *testing.T) {
 		LogLevel:  "debug",
 		HTTPPort:  e2eBqHTTPPort,
 		ProjectID: testProjectID,
-		Consumer: struct {
-			SubscriptionID  string `mapstructure:"subscription_id"`
-			CredentialsFile string `mapstructure:"credentials_file"`
-		}{SubscriptionID: testPubsubSubscriptionID},
+		Consumer:  bqinit.Consumer{SubscriptionID: testPubsubSubscriptionID},
 		BigQueryConfig: bqstore.BigQueryDatasetConfig{
 			ProjectID: testProjectID,
 			DatasetID: e2eBigQueryDatasetID,
@@ -158,10 +156,13 @@ func TestE2E_MqttToBigQueryFlow(t *testing.T) {
 	bqClient, err := bigquery.NewClient(ctx, testProjectID, bqConnections.ClientOptions...)
 	defer bqClient.Close()
 
-	bqConsumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
+	pubsubClient, err := pubsub.NewClient(ctx, testProjectID, pubsubConnections.ClientOptions...)
+	require.NoError(t, err)
+
+	bqConsumer, err := messagepipeline.NewGooglePubsubConsumer(&messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      testProjectID,
 		SubscriptionID: testPubsubSubscriptionID,
-	}, pubsubConnections.ClientOptions, bqLogger)
+	}, pubsubClient, bqLogger)
 	require.NoError(t, err)
 
 	// *** REFACTORED PART: Use the new, single convenience constructor ***

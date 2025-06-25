@@ -202,7 +202,7 @@ func generateDeploymentScripts(prov *servicemanager.ProvisionedResources, cfg *s
 	}
 
 	ingestionSpec, _ := findServiceSpec("ingestion-service", cfg.Services)
-	ingestionStdVars := fmt.Sprintf("APP_PROJECT_ID=%s,APP_PUBLISHER_TOPIC_ID=%s", projectID, prov.PubSubTopics[0].Name)
+	ingestionStdVars := fmt.Sprintf("APP_PROJECT_ID=%s,APP_PUBLISHER_TOPIC_ID=%s", projectID, prov.Topics[0].Name)
 	ingestionMetaVars := buildMetadataEnvVars(ingestionSpec.Metadata)
 	ingestionConfig := DeploymentConfig{
 		Env:                      env,
@@ -224,7 +224,7 @@ func generateDeploymentScripts(prov *servicemanager.ProvisionedResources, cfg *s
 
 	analysisSpec, _ := findServiceSpec("analysis-service", cfg.Services)
 	analysisStdVars := fmt.Sprintf("APP_PROJECT_ID=%s,APP_CONSUMER_SUBSCRIPTION_ID=%s,APP_BIGQUERY_DATASET_ID=%s,APP_BIGQUERY_TABLE_ID=%s",
-		projectID, prov.PubSubSubscriptions[0].Name, prov.BigQueryTables[0].Dataset, prov.BigQueryTables[0].Name)
+		projectID, prov.Subscriptions[0].Name, prov.BigQueryTables[0].Dataset, prov.BigQueryTables[0].Name)
 	analysisMetaVars := buildMetadataEnvVars(analysisSpec.Metadata)
 	analysisConfig := DeploymentConfig{
 		Env:                      env,

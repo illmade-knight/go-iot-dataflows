@@ -3,38 +3,33 @@
 package loade2e_test
 
 import (
-	"cloud.google.com/go/pubsub"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"cloud.google.com/go/storage"
 	"github.com/google/uuid"
+	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/icestore/icinit"
+	"github.com/illmade-knight/go-iot/pkg/icestore"
+	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
+	"github.com/illmade-knight/go-iot/pkg/servicemanager"
+	"github.com/illmade-knight/go-iot/pkg/types"
+	"google.golang.org/api/iterator"
+
+	"cloud.google.com/go/pubsub"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/api/iterator"
-
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/icestore/icinit"
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
 
 	"github.com/illmade-knight/go-iot/helpers/emulators"
 	"github.com/illmade-knight/go-iot/helpers/loadgen"
-
-	"github.com/illmade-knight/go-iot/pkg/icestore"
-	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
-	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
-	"github.com/illmade-knight/go-iot/pkg/servicemanager"
-	"github.com/illmade-knight/go-iot/pkg/types"
 )
 
 // --- Test Flags ---
@@ -49,21 +44,24 @@ const (
 	loadTestNumDevices     = 10
 	loadTestRatePerDevice  = 2.0
 	cloudLoadTestTimeout   = 10 * time.Minute
-	testMqttTopicPattern   = "devices/+/data"
-	testMqttClientIDPrefix = "ingestion-service-cloud-load-gcs"
-	cloudTestMqttHTTPPort  = ":9094"
 	cloudTestGCSHTTPPort   = ":9095"
 	cloudGCSBucketPrefix   = "e2e-garden-monitor-loadtest-"
 	maxBucketNameLength    = 63
+	testMqttTopicPattern   = "devices/+/data"
+	testMqttClientIDPrefix = "ingestion-service-cloud-load"
+	cloudTestMqttHTTPPort  = ":9092"
+	cloudTestBqHTTPPort    = ":9093"
 )
 
-// buildTestServicesDefinitionGCS creates a complete TopLevelConfig in memory for the GCS load test.
+// buildTestServicesDefinitionGCS creates a complete TopLevelConfig in memory for the GCS load test,
+// conforming to the new ResourceGroup structure.
 func buildTestServicesDefinitionGCS(runID, gcpProjectID string) *servicemanager.TopLevelConfig {
 	dataflowName := "mqtt-to-gcs-loadtest"
 	topicID := fmt.Sprintf("processed-device-data-gcs-%s", runID)
 	subscriptionID := fmt.Sprintf("archival-service-sub-gcs-%s", runID)
 	bucketName := fmt.Sprintf("%s%s", cloudGCSBucketPrefix, runID)
 
+	// Sanitize bucket name for GCS compliance
 	bucketName = strings.ToLower(strings.ReplaceAll(bucketName, "_", "-"))
 	if len(bucketName) > maxBucketNameLength {
 		bucketName = bucketName[:maxBucketNameLength]
@@ -78,35 +76,34 @@ func buildTestServicesDefinitionGCS(runID, gcpProjectID string) *servicemanager.
 			{Name: "ingestion-service"},
 			{Name: "archival-service"},
 		},
-		Dataflows: []servicemanager.DataflowSpec{
+		Dataflows: []servicemanager.ResourceGroup{
 			{
-				Name:     dataflowName,
-				Services: []string{"ingestion-service", "archival-service"},
+				Name:         dataflowName,
+				ServiceNames: []string{"ingestion-service", "archival-service"},
 				Lifecycle: &servicemanager.LifecyclePolicy{
 					Strategy:            servicemanager.LifecycleStrategyEphemeral,
 					KeepResourcesOnTest: *keepResources,
 				},
-			},
-		},
-		Resources: servicemanager.ResourcesSpec{
-			MessagingTopics: []servicemanager.MessagingTopicConfig{
-				{Name: topicID, ProducerService: "ingestion-service"},
-			},
-			MessagingSubscriptions: []servicemanager.MessagingSubscriptionConfig{
-				{Name: subscriptionID, Topic: topicID, ConsumerService: "archival-service"},
-			},
-			GCSBuckets: []servicemanager.GCSBucket{
-				{
-					Name:              bucketName,
-					AccessingServices: []string{"archival-service"},
+				Resources: servicemanager.ResourcesSpec{
+					Topics: []servicemanager.TopicConfig{
+						{Name: topicID, ProducerService: "ingestion-service"},
+					},
+					Subscriptions: []servicemanager.SubscriptionConfig{
+						{Name: subscriptionID, Topic: topicID, ConsumerService: "archival-service"},
+					},
+					GCSBuckets: []servicemanager.GCSBucket{
+						{
+							Name:              bucketName,
+							AccessingServices: []string{"archival-service"},
+						},
+					},
 				},
 			},
 		},
 	}
 }
 
-// startGCSProcessingService has been updated to be more robust against propagation delays.
-// startGCSProcessingService has been updated to be more robust against propagation delays.
+// startGCSProcessingService has been updated to use the correct signature for NewGooglePubsubConsumer.
 func startGCSProcessingService(t *testing.T, ctx context.Context, gcpProjectID, subID, bucketName string) (*messagepipeline.ProcessingService[icestore.ArchivalData], *icinit.Server) {
 	t.Helper()
 	icestoreCfg := &icinit.IceServiceConfig{
@@ -129,8 +126,6 @@ func startGCSProcessingService(t *testing.T, ctx context.Context, gcpProjectID, 
 	}
 
 	gcsLogger := log.With().Str("service", "gcs-processor").Logger()
-
-	// Create clients for GCS and Pub/Sub that this service needs to operate.
 	gcsClient, err := storage.NewClient(ctx)
 	require.NoError(t, err)
 	t.Cleanup(func() { gcsClient.Close() })
@@ -139,47 +134,39 @@ func startGCSProcessingService(t *testing.T, ctx context.Context, gcpProjectID, 
 	require.NoError(t, err)
 	t.Cleanup(func() { pubsubClient.Close() })
 
-	// Add a retry loop to wait for the bucket to become available.
+	// Retry loop to wait for the bucket to become available.
 	bucketHandle := gcsClient.Bucket(bucketName)
-	var bucketExists bool
-	for i := 0; i < 5; i++ {
+	require.Eventually(t, func() bool {
 		_, err := bucketHandle.Attrs(ctx)
 		if err == nil {
-			bucketExists = true
 			gcsLogger.Info().Str("bucket", bucketName).Msg("Successfully confirmed GCS bucket exists.")
-			break
+			return true
 		}
 		if !errors.Is(err, storage.ErrBucketNotExist) {
-			require.NoError(t, err, "Failed to get bucket attributes with unexpected error")
+			t.Fatalf("Failed to get bucket attributes with unexpected error: %v", err)
 		}
-		gcsLogger.Warn().Str("bucket", bucketName).Int("attempt", i+1).Msg("Bucket not yet found, retrying...")
-		time.Sleep(2 * time.Second)
-	}
-	require.True(t, bucketExists, "GCS bucket %s was not found after multiple retries", bucketName)
+		gcsLogger.Warn().Str("bucket", bucketName).Msg("Bucket not yet found, retrying...")
+		return false
+	}, 30*time.Second, 2*time.Second, "GCS bucket %s was not found after multiple retries", bucketName)
 
-	// Add a similar retry loop for the Pub/Sub subscription.
+	// Retry loop for the Pub/Sub subscription.
 	subscription := pubsubClient.Subscription(subID)
-	var subExists bool
-	for i := 0; i < 5; i++ {
+	require.Eventually(t, func() bool {
 		exists, err := subscription.Exists(ctx)
-		if err != nil {
-			require.NoError(t, err, "Failed to check for subscription existence with an unexpected error")
-		}
+		require.NoError(t, err, "Failed to check for subscription existence with an unexpected error")
 		if exists {
-			subExists = true
 			gcsLogger.Info().Str("subscription", subID).Msg("Successfully confirmed Pub/Sub subscription exists.")
-			break
+			return true
 		}
-		gcsLogger.Warn().Str("subscription", subID).Int("attempt", i+1).Msg("Subscription not yet found, retrying...")
-		time.Sleep(2 * time.Second)
-	}
-	require.True(t, subExists, "Pub/Sub subscription %s was not found after multiple retries", subID)
+		gcsLogger.Warn().Str("subscription", subID).Msg("Subscription not yet found, retrying...")
+		return false
+	}, 30*time.Second, 2*time.Second, "Pub/Sub subscription %s was not found after multiple retries", subID)
 
-	// Now that resources are confirmed to exist, create the consumer.
-	gcsConsumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
+	// Correctly create the consumer with the client.
+	gcsConsumer, err := messagepipeline.NewGooglePubsubConsumer(&messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      icestoreCfg.ProjectID,
 		SubscriptionID: icestoreCfg.Consumer.SubscriptionID,
-	}, nil, gcsLogger) // Pass the existing client to the consumer
+	}, pubsubClient, gcsLogger)
 	require.NoError(t, err)
 
 	batcher, err := icestore.NewGCSBatchProcessor(
@@ -233,9 +220,6 @@ func TestManagedCloudGCSSLoad(t *testing.T) {
 	provisioned, err := manager.SetupDataflow(ctx, "loadtest", dataflowName)
 	require.NoError(t, err, "ServiceManager.SetupDataflow failed")
 
-	//seems to take a while for subscriptions to form
-	time.Sleep(time.Second * 10)
-
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cleanupCancel()
@@ -244,12 +228,13 @@ func TestManagedCloudGCSSLoad(t *testing.T) {
 		assert.NoError(t, teardownErr, "ServiceManager.TeardownDataflow failed")
 	})
 
+	// Retrieve resource names from the new ProvisionedResources struct fields
 	require.NotEmpty(t, provisioned.GCSBuckets, "Provisioning must return a GCS bucket")
 	bucketName := provisioned.GCSBuckets[0].Name
-	require.NotEmpty(t, provisioned.PubSubTopics, "Provisioning must return a Pub/Sub topic")
-	topicID := provisioned.PubSubTopics[0].Name
-	require.NotEmpty(t, provisioned.PubSubSubscriptions, "Provisioning must return a Pub/Sub subscription")
-	subscriptionID := provisioned.PubSubSubscriptions[0].Name
+	require.NotEmpty(t, provisioned.Topics, "Provisioning must return a Pub/Sub topic")
+	topicID := provisioned.Topics[0].Name
+	require.NotEmpty(t, provisioned.Subscriptions, "Provisioning must return a Pub/Sub subscription")
+	subscriptionID := provisioned.Subscriptions[0].Name
 
 	log.Info().Str("bucket", bucketName).Str("topic", topicID).Str("subscription", subscriptionID).Msg("Using provisioned resources")
 
@@ -298,41 +283,22 @@ func verifyGCSResults(t *testing.T, ctx context.Context, bucketName string) {
 	bucketHandle := gcsClient.Bucket(bucketName)
 
 	var lastObjectCount = -1
-	var pollsWithNoChange int
-	const maxPollsWithNoChange = 3
-
-	verificationCtx, verificationCancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer verificationCancel()
-	tick := time.NewTicker(15 * time.Second)
-	defer tick.Stop()
-
-	for {
-		select {
-		case <-verificationCtx.Done():
-			t.Fatalf("Test timed out waiting for GCS objects. Last count: %d, Expected Min: %d", lastObjectCount, expectedMinGCSObjects)
-		case <-tick.C:
-			currentObjects, err := listGCSObjectAttrs(t, verificationCtx, bucketHandle)
-			if err != nil {
-				log.Warn().Err(err).Msg("Polling GCS objects failed")
-				continue
-			}
-			currentObjectCount := len(currentObjects)
-			log.Info().Int("current_count", currentObjectCount).Int("last_count", lastObjectCount).Int("stable_polls", pollsWithNoChange).Msg("Polling GCS object count")
-
-			if currentObjectCount == lastObjectCount {
-				pollsWithNoChange++
-			} else {
-				pollsWithNoChange = 0
-			}
-			lastObjectCount = currentObjectCount
-
-			if pollsWithNoChange >= maxPollsWithNoChange {
-				require.GreaterOrEqual(t, lastObjectCount, expectedMinGCSObjects, "GCS object count stabilized at %d, which is below the success threshold of %d.", lastObjectCount, expectedMinGCSObjects)
-				log.Info().Msg("GCS object count has stabilized and meets the success threshold. Verification successful!")
-				return // Exit verification
-			}
+	require.Eventually(t, func() bool {
+		currentObjects, err := listGCSObjectAttrs(t, ctx, bucketHandle)
+		if err != nil {
+			log.Warn().Err(err).Msg("Polling GCS objects failed")
+			return false
 		}
-	}
+		currentObjectCount := len(currentObjects)
+		log.Info().Int("current_count", currentObjectCount).Int("last_count", lastObjectCount).Msg("Polling GCS object count")
+
+		if currentObjectCount == lastObjectCount && currentObjectCount >= expectedMinGCSObjects {
+			log.Info().Msg("GCS object count has stabilized and meets the success threshold. Verification successful!")
+			return true
+		}
+		lastObjectCount = currentObjectCount
+		return false
+	}, 5*time.Minute, 15*time.Second, "Test timed out waiting for GCS objects to stabilize")
 }
 
 // listGCSObjectAttrs is a helper function to list objects in a GCS bucket.
@@ -351,54 +317,4 @@ func listGCSObjectAttrs(t *testing.T, ctx context.Context, bucket *storage.Bucke
 		attrs = append(attrs, objAttrs)
 	}
 	return attrs, nil
-}
-
-func startIngestionService(t *testing.T, ctx context.Context, projectID, mqttBrokerURL, topicID string) (*mqttconverter.IngestionService, *mqinit.Server) {
-	t.Helper()
-	mqttCfg := &mqinit.Config{
-		LogLevel: "info", HTTPPort: cloudTestMqttHTTPPort, ProjectID: projectID,
-		Publisher: struct {
-			TopicID         string `mapstructure:"topic_id"`
-			CredentialsFile string `mapstructure:"credentials_file"`
-		}{TopicID: topicID},
-		MQTT:    mqttconverter.MQTTClientConfig{BrokerURL: mqttBrokerURL, Topic: testMqttTopicPattern, ClientIDPrefix: testMqttClientIDPrefix},
-		Service: mqttconverter.IngestionServiceConfig{InputChanCapacity: 1000, NumProcessingWorkers: 20},
-	}
-	logger := log.With().Str("service", "mqtt-ingestion").Logger()
-	publisher, err := mqttconverter.NewGooglePubsubPublisher(ctx,
-		mqttconverter.GooglePubsubPublisherConfig{ProjectID: mqttCfg.ProjectID, TopicID: mqttCfg.Publisher.TopicID}, logger)
-	require.NoError(t, err)
-	service := mqttconverter.NewIngestionService(publisher, nil, logger, mqttCfg.Service, mqttCfg.MQTT)
-	server := mqinit.NewServer(mqttCfg, service, logger)
-	go func() {
-		if err := server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error().Err(err).Msg("Ingestion server failed during test execution")
-		}
-	}()
-	return service, server
-}
-
-type gardenMonitorPayloadGenerator struct {
-	mu            sync.Mutex
-	isInitialized bool
-	sequence      *loadgen.Sequence
-	// ... other state fields
-}
-
-func (g *gardenMonitorPayloadGenerator) GeneratePayload(device *loadgen.Device) ([]byte, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if !g.isInitialized {
-		g.sequence = loadgen.NewSequence(0)
-		// ... initial values
-		g.isInitialized = true
-	}
-	// ... generate payload logic
-	payload := types.GardenMonitorReadings{
-		DE:        device.ID,
-		Sequence:  int(g.sequence.Next()),
-		Timestamp: time.Now().UTC(),
-		// ... other fields
-	}
-	return json.Marshal(payload)
 }

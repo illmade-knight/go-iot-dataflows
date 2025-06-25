@@ -91,10 +91,7 @@ func TestGardenMonitorService_FullFlow(t *testing.T) {
 		LogLevel:  "debug",
 		HTTPPort:  testHTTPPort,
 		ProjectID: testProjectID,
-		Consumer: struct {
-			SubscriptionID  string `mapstructure:"subscription_id"`
-			CredentialsFile string `mapstructure:"credentials_file"`
-		}{
+		Consumer: bqinit.Consumer{
 			SubscriptionID: testInputSubscriptionID,
 		},
 		BigQueryConfig: bqstore.BigQueryDatasetConfig{

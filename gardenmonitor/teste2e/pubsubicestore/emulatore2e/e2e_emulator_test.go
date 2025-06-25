@@ -3,6 +3,7 @@
 package main_test
 
 import (
+	"cloud.google.com/go/pubsub"
 	"cloud.google.com/go/storage"
 	"context"
 	"encoding/json"
@@ -135,11 +136,14 @@ func runE2ETestCase(t *testing.T, tc e2eTestCase) {
 		TopicSubs: map[string]string{testPubsubTopicID: testPubsubSubscriptionID},
 	})
 
+	pubsubClient, err := pubsub.NewClient(ctx, testProjectID, pubsubConnections.ClientOptions...)
+	require.NoError(t, err)
+
 	consumerLogger := log.With().Str("service", "pubsub-consumer").Logger()
-	gcsConsumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
+	gcsConsumer, err := messagepipeline.NewGooglePubsubConsumer(&messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      testProjectID,
 		SubscriptionID: testPubsubSubscriptionID,
-	}, pubsubConnections.ClientOptions, consumerLogger)
+	}, pubsubClient, consumerLogger)
 	require.NoError(t, err)
 
 	log.Info().Msg("Pausing before ingestion setup")

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"sync"
 	"testing"
@@ -20,24 +19,17 @@ import (
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/api/iterator"
-
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/bigquery/bqinit"
-	"github.com/illmade-knight/go-iot-dataflows/gardenmonitor/ingestion/mqinit"
 
 	"github.com/illmade-knight/go-iot/helpers/emulators"
 	"github.com/illmade-knight/go-iot/helpers/loadgen"
 
-	"github.com/illmade-knight/go-iot/pkg/bqstore"
-	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
-	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 	"github.com/illmade-knight/go-iot/pkg/servicemanager"
 	"github.com/illmade-knight/go-iot/pkg/types"
 )
 
 // --- Test Flags ---
 var (
-	keepDataset = flag.Bool("keep-dataset", false, "If true, the BigQueryConfig dataset will not be deleted after the test, but will expire automatically after 1 day.")
+	keepDataset = flag.Bool("keep-dataset", false, "If true, the BigQuery dataset will not be deleted after the test, but will expire automatically after 1 day.")
 )
 
 // --- Test Constants ---
@@ -54,7 +46,8 @@ const (
 	cloudTestBqHTTPPort    = ":9093"
 )
 
-// buildTestServicesDefinition creates a complete TopLevelConfig in memory for the load test.
+// buildTestServicesDefinition creates a complete TopLevelConfig in memory for the load test,
+// following the new ResourceGroup structure.
 func buildTestServicesDefinition(runID, gcpProjectID string) *servicemanager.TopLevelConfig {
 	dataflowName := "mqtt-to-bigquery-loadtest"
 	topicID := fmt.Sprintf("processed-device-data-%s", runID)
@@ -71,34 +64,34 @@ func buildTestServicesDefinition(runID, gcpProjectID string) *servicemanager.Top
 			{Name: "ingestion-service", ServiceAccount: "ingestion-sa@your-gcp-project.iam.gserviceaccount.com"},
 			{Name: "analysis-service", ServiceAccount: "analysis-sa@your-gcp-project.iam.gserviceaccount.com"},
 		},
-		Dataflows: []servicemanager.DataflowSpec{
+		Dataflows: []servicemanager.ResourceGroup{
 			{
-				Name:        dataflowName,
-				Description: "Ephemeral dataflow for the cloud load test.",
-				Services:    []string{"ingestion-service", "analysis-service"},
+				Name:         dataflowName,
+				Description:  "Ephemeral dataflow for the cloud load test.",
+				ServiceNames: []string{"ingestion-service", "analysis-service"},
 				Lifecycle: &servicemanager.LifecyclePolicy{
 					Strategy:            servicemanager.LifecycleStrategyEphemeral,
-					KeepResourcesOnTest: *keepDataset, // Set from the command-line flag
+					KeepResourcesOnTest: *keepDataset,
 				},
-			},
-		},
-		Resources: servicemanager.ResourcesSpec{
-			MessagingTopics: []servicemanager.MessagingTopicConfig{
-				{Name: topicID, ProducerService: "ingestion-service"},
-			},
-			MessagingSubscriptions: []servicemanager.MessagingSubscriptionConfig{
-				{Name: subscriptionID, Topic: topicID, ConsumerService: "analysis-service"},
-			},
-			BigQueryDatasets: []servicemanager.BigQueryDataset{
-				{Name: datasetID, Description: "Temp dataset for load test"},
-			},
-			BigQueryTables: []servicemanager.BigQueryTable{
-				{
-					Name:                   tableID,
-					Dataset:                datasetID,
-					AccessingServices:      []string{"analysis-service"},
-					SchemaSourceType:       "go_struct",
-					SchemaSourceIdentifier: "github.com/illmade-knight/go-iot/pkg/types.GardenMonitorReadings",
+				Resources: servicemanager.ResourcesSpec{
+					Topics: []servicemanager.TopicConfig{
+						{Name: topicID, ProducerService: "ingestion-service"},
+					},
+					Subscriptions: []servicemanager.SubscriptionConfig{
+						{Name: subscriptionID, Topic: topicID, ConsumerService: "analysis-service"},
+					},
+					BigQueryDatasets: []servicemanager.BigQueryDataset{
+						{Name: datasetID, Description: "Temp dataset for load test"},
+					},
+					BigQueryTables: []servicemanager.BigQueryTable{
+						{
+							Name:                   tableID,
+							Dataset:                datasetID,
+							AccessingServices:      []string{"analysis-service"},
+							SchemaSourceType:       "go_struct",
+							SchemaSourceIdentifier: "github.com/illmade-knight/go-iot/pkg/types.GardenMonitorReadings",
+						},
+					},
 				},
 			},
 		},
@@ -107,7 +100,6 @@ func buildTestServicesDefinition(runID, gcpProjectID string) *servicemanager.Top
 
 // TestManagedCloudLoad subjects the entire pipeline to load, using the ServiceManager for setup and teardown.
 func TestManagedCloudLoad(t *testing.T) {
-	t.Setenv("GOOGLE_CLOUD_PROJECT", cloudTestGCPProjectID)
 	// --- 1. Test Setup & Authentication ---
 	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
 	if projectID == "" {
@@ -147,12 +139,10 @@ func TestManagedCloudLoad(t *testing.T) {
 	require.NoError(t, err)
 
 	dataflowName := servicesConfig.Dataflows[0].Name
-	provisioned, err := serviceManager.SetupDataflow(ctx, "loadtest", dataflowName)
+	_, err = serviceManager.SetupDataflow(ctx, "loadtest", dataflowName)
 	require.NoError(t, err, "ServiceManager.SetupDataflow failed")
 
 	t.Cleanup(func() {
-		// Use a new, independent context for cleanup to ensure it runs
-		// even if the main test context times out.
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cleanupCancel()
 		log.Info().Str("runID", runID).Msg("Test finished. Tearing down dataflow resources...")
@@ -160,20 +150,23 @@ func TestManagedCloudLoad(t *testing.T) {
 		assert.NoError(t, teardownErr, "ServiceManager.TeardownDataflow failed")
 	})
 
-	// --- 4. Get Resource Names from the Provisioning Result ---
-	log.Info().Msg("Getting resource names from the provisioned resources result...")
-	require.NotEmpty(t, provisioned.PubSubTopics, "Provisioning must return a Pub/Sub topic")
-	topicID := provisioned.PubSubTopics[0].Name
+	// --- 4. Get Resource Names from the Service Definition ---
+	log.Info().Msg("Getting resource names from the service definition...")
+	dataflowSpec, err := servicesDef.GetDataflow(dataflowName)
+	require.NoError(t, err)
 
-	require.NotEmpty(t, provisioned.PubSubSubscriptions, "Provisioning must return a Pub/Sub subscription")
-	subscriptionID := provisioned.PubSubSubscriptions[0].Name
+	require.NotEmpty(t, dataflowSpec.Resources.Topics, "Definition must contain a Pub/Sub topic")
+	topicID := dataflowSpec.Resources.Topics[0].Name
 
-	require.NotEmpty(t, provisioned.BigQueryTables, "Provisioning must return a BigQueryConfig table")
-	datasetID := provisioned.BigQueryTables[0].Dataset
-	tableID := provisioned.BigQueryTables[0].Name
+	require.NotEmpty(t, dataflowSpec.Resources.Subscriptions, "Definition must contain a Pub/Sub subscription")
+	subscriptionID := dataflowSpec.Resources.Subscriptions[0].Name
+
+	require.NotEmpty(t, dataflowSpec.Resources.BigQueryTables, "Definition must contain a BigQuery table")
+	datasetID := dataflowSpec.Resources.BigQueryTables[0].Dataset
+	tableID := dataflowSpec.Resources.BigQueryTables[0].Name
 
 	log.Info().Str("topic", topicID).Str("subscription", subscriptionID).Msg("Using Pub/Sub resources")
-	log.Info().Str("dataset", datasetID).Str("table", tableID).Msg("Using BigQueryConfig resources")
+	log.Info().Str("dataset", datasetID).Str("table", tableID).Msg("Using BigQuery resources")
 
 	// --- 5. Start Local Services & Load Generator ---
 	log.Info().Msg("LoadTest: Setting up Mosquitto container...")
@@ -222,7 +215,7 @@ func TestManagedCloudLoad(t *testing.T) {
 	}
 
 	// --- 6. Verification ---
-	log.Info().Msg("Load generation complete. Verifying results in BigQueryConfig...")
+	log.Info().Msg("Load generation complete. Verifying results in BigQuery...")
 	expectedMessages := int(float64(loadTestNumDevices) * loadTestRatePerDevice * loadTestDuration.Seconds())
 	successThreshold := int(float64(expectedMessages) * loadTestSuccessPercent)
 
@@ -230,9 +223,9 @@ func TestManagedCloudLoad(t *testing.T) {
 	require.NoError(t, err)
 	defer bqClient.Close()
 
-	var lastRowCount int64 = -1 // Use -1 to indicate the first run
+	var lastRowCount int64 = -1
 	var pollsWithNoChange int
-	const maxPollsWithNoChange = 3 // Number of stable polls before we assume completion
+	const maxPollsWithNoChange = 3
 
 	verificationCtx, verificationCancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer verificationCancel()
@@ -243,7 +236,7 @@ VerificationLoop:
 	for {
 		select {
 		case <-verificationCtx.Done():
-			t.Fatalf("Test timed out waiting for BigQueryConfig results. Last count: %d, Threshold: %d", lastRowCount, successThreshold)
+			t.Fatalf("Test timed out waiting for BigQuery results. Last count: %d, Threshold: %d", lastRowCount, successThreshold)
 		case <-tick.C:
 			currentRowCount, err := getRowCount(verificationCtx, bqClient, datasetID, tableID)
 			if err != nil {
@@ -271,7 +264,6 @@ VerificationLoop:
 		}
 	}
 
-	// Final check outside the loop
 	finalCount, err := getRowCount(verificationCtx, bqClient, datasetID, tableID)
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, finalCount, int64(successThreshold), "Final count in BQ (%d) is less than success threshold (%d)", finalCount, successThreshold)
@@ -289,104 +281,3 @@ VerificationLoop:
 }
 
 // --- Helper Functions ---
-
-func getRowCount(ctx context.Context, client *bigquery.Client, datasetID, tableID string) (int64, error) {
-	queryString := fmt.Sprintf("SELECT COUNT(*) as count FROM `%s.%s`", datasetID, tableID)
-	query := client.Query(queryString)
-	it, err := query.Read(ctx)
-	if err != nil {
-		return 0, err
-	}
-	var row struct {
-		Count int64 `bigquery:"count"`
-	}
-	if err := it.Next(&row); err != nil {
-		if errors.Is(err, iterator.Done) {
-			return 0, nil // No rows found, which is a valid count of 0
-		}
-		return 0, err
-	}
-	return row.Count, nil
-}
-
-func startIngestionService(t *testing.T, ctx context.Context, projectID, mqttBrokerURL, topicID string) (*mqttconverter.IngestionService, *mqinit.Server) {
-	t.Helper()
-	mqttCfg := &mqinit.Config{
-		LogLevel: "info", HTTPPort: cloudTestMqttHTTPPort, ProjectID: projectID,
-		Publisher: struct {
-			TopicID         string `mapstructure:"topic_id"`
-			CredentialsFile string `mapstructure:"credentials_file"`
-		}{TopicID: topicID},
-		MQTT:    mqttconverter.MQTTClientConfig{BrokerURL: mqttBrokerURL, Topic: testMqttTopicPattern, ClientIDPrefix: testMqttClientIDPrefix},
-		Service: mqttconverter.IngestionServiceConfig{InputChanCapacity: 1000, NumProcessingWorkers: 20},
-	}
-	logger := log.With().Str("service", "mqtt-ingestion").Logger()
-	publisher, err := mqttconverter.NewGooglePubsubPublisher(ctx,
-		mqttconverter.GooglePubsubPublisherConfig{ProjectID: mqttCfg.ProjectID, TopicID: mqttCfg.Publisher.TopicID}, logger)
-	require.NoError(t, err)
-	service := mqttconverter.NewIngestionService(publisher, nil, logger, mqttCfg.Service, mqttCfg.MQTT)
-	server := mqinit.NewServer(mqttCfg, service, logger)
-	go func() {
-		if err := server.Start(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Error().Err(err).Msg("Ingestion server failed during test execution")
-		}
-	}()
-	return service, server
-}
-
-func startBQProcessingService(t *testing.T, ctx context.Context, gcpProjectID, subID, datasetID, tableID string) (*messagepipeline.ProcessingService[types.GardenMonitorReadings], *bqinit.Server) {
-	t.Helper()
-	bqCfg := &bqinit.Config{
-		LogLevel:  "info",
-		HTTPPort:  cloudTestBqHTTPPort,
-		ProjectID: gcpProjectID,
-		Consumer: struct {
-			SubscriptionID  string `mapstructure:"subscription_id"`
-			CredentialsFile string `mapstructure:"credentials_file"`
-		}{SubscriptionID: subID},
-		BigQueryConfig: bqstore.BigQueryDatasetConfig{
-			ProjectID: gcpProjectID,
-			DatasetID: datasetID,
-			TableID:   tableID,
-		},
-		BatchProcessing: struct {
-			bqstore.BatchInserterConfig `mapstructure:"datasetup"`
-			NumWorkers                  int `mapstructure:"num_workers"`
-		}{
-			BatchInserterConfig: bqstore.BatchInserterConfig{
-				BatchSize:    5,
-				FlushTimeout: 10 * time.Second,
-			},
-			NumWorkers: 2,
-		},
-	}
-	bqLogger := log.With().Str("service", "bq-processor").Logger()
-	bqClient, err := bigquery.NewClient(ctx, gcpProjectID)
-	require.NoError(t, err)
-
-	psClient, err := pubsub.NewClient(ctx, gcpProjectID)
-	require.NoError(t, err)
-
-	bqConsumer, err := messagepipeline.NewGooglePubsubConsumer(&messagepipeline.GooglePubsubConsumerConfig{
-		ProjectID:      bqCfg.ProjectID,
-		SubscriptionID: bqCfg.Consumer.SubscriptionID,
-	}, psClient, bqLogger)
-	require.NoError(t, err)
-
-	// *** REFACTORED PART: Use the new, single convenience constructor ***
-	batchInserter, err := bqstore.NewBigQueryBatchProcessor[types.GardenMonitorReadings](ctx, bqClient, &bqCfg.BatchProcessing.BatchInserterConfig, &bqCfg.BigQueryConfig, bqLogger)
-	require.NoError(t, err)
-
-	// *** REFACTORED PART: Use the new service constructor ***
-	processingService, err := bqstore.NewBigQueryService[types.GardenMonitorReadings](bqCfg.BatchProcessing.NumWorkers, bqConsumer, batchInserter, types.ConsumedMessageTransformer, bqLogger)
-	require.NoError(t, err)
-
-	bqServer := bqinit.NewServer(bqCfg, processingService, bqLogger)
-	require.NoError(t, err)
-	go func() {
-		if srvErr := bqServer.Start(); srvErr != nil && !errors.Is(srvErr, http.ErrServerClosed) {
-			t.Errorf("BQ Processing server failed: %v", srvErr)
-		}
-	}()
-	return processingService, bqServer
-}

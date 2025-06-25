@@ -305,10 +305,10 @@ func runCloudE2ETestCase(t *testing.T, projectID, mqttBrokerURL string, tc e2eTe
 		require.NoError(t, err)
 	}
 
-	gcsConsumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, &messagepipeline.GooglePubsubConsumerConfig{
+	gcsConsumer, err := messagepipeline.NewGooglePubsubConsumer(&messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      projectID,
 		SubscriptionID: cloudPubsubSubscriptionID,
-	}, nil, gcsLogger) // nil for pubsub.ClientOption, relies on ADC/credentials
+	}, pubsubClient, gcsLogger) // nil for pubsub.ClientOption, relies on ADC/credentials
 	require.NoError(t, err)
 
 	batcher, err := icestore.NewGCSBatchProcessor(

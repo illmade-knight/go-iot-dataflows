@@ -11,6 +11,11 @@ import (
 	"github.com/spf13/viper"
 )
 
+type Consumer struct {
+	SubscriptionID  string  `mapstructure:"subscription_id"`
+	CredentialsFile *string `mapstructure:"credentials_file"`
+}
+
 // Config holds all configuration for the application.
 // It's structured to neatly group settings for different components.
 type Config struct {
@@ -24,10 +29,7 @@ type Config struct {
 	ProjectID string `mapstructure:"project_id"`
 
 	// Consumer holds settings for the Pub/Sub subscriber.
-	Consumer struct {
-		SubscriptionID  string `mapstructure:"subscription_id"`
-		CredentialsFile string `mapstructure:"credentials_file"`
-	} `mapstructure:"consumer"`
+	Consumer Consumer `mapstructure:"consumer"`
 
 	// BigQueryConfig holds settings for the BigQueryConfig inserter.
 	BigQueryConfig bqstore.BigQueryDatasetConfig `mapstructure:"bigquery"`

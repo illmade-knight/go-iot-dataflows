@@ -32,6 +32,7 @@ import (
 
 	"github.com/illmade-knight/go-iot/pkg/bqstore"
 	"github.com/illmade-knight/go-iot/pkg/device" // For in-memory device cache in test
+	"github.com/illmade-knight/go-iot/pkg/enrichment"
 	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
 	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 	"github.com/illmade-knight/go-iot/pkg/servicemanager"
@@ -174,7 +175,7 @@ func TestManagedCloudLoad(t *testing.T) {
 	// Register all relevant Go structs for BigQuery schema generation
 	schemaRegistry := make(map[string]interface{})
 	schemaRegistry["github.com/illmade-knight/go-iot/pkg/types.GardenMonitorReadings"] = types.GardenMonitorReadings{}
-	schemaRegistry["github.com/illmade-knight/go-iot-dataflows/gardenmonitor/enrich.EnrichedMessage"] = enrich.EnrichedMessage{}
+	schemaRegistry["github.com/illmade-knight/go-iot-dataflows/gardenmonitor/enrich.EnrichedMessage"] = enrichment.EnrichedMessage{}
 	schemaRegistry["github.com/illmade-knight/go-iot-dataflows/gardenmonitor/managedload_test.TestBigQueryEnrichedPayload"] = TestBigQueryEnrichedPayload{}
 
 	// --- 3. Use ServiceManager to Provision Infrastructure ---
@@ -199,52 +200,10 @@ func TestManagedCloudLoad(t *testing.T) {
 	// --- 4. Get Resource Names from the Provisioning Result ---
 	log.Info().Msg("Getting resource names from the provisioned resources result...")
 
-	// Get the raw topic (ingestion output, enrichment input)
-	rawTopicID := ""
-	for _, topic := range provisioned.PubSubTopics {
-		if topic.ProducerService == "ingestion-service" {
-			rawTopicID = topic.Name
-			break
-		}
-	}
-	require.NotEmpty(t, rawTopicID, "Raw Pub/Sub topic not found in provisioned resources")
-
-	// Get the enriched topic (enrichment output, BigQuery input)
-	enrichedTopicID := ""
-	for _, topic := range provisioned.PubSubTopics {
-		if topic.ProducerService == "enrichment-service" {
-			enrichedTopicID = topic.Name
-			break
-		}
-	}
-	require.NotEmpty(t, enrichedTopicID, "Enriched Pub/Sub topic not found in provisioned resources")
-
-	// Get the enrichment subscription
-	enrichmentSubID := ""
-	for _, sub := range provisioned.PubSubSubscriptions {
-		if sub.ConsumerService == "enrichment-service" {
-			enrichmentSubID = sub.Name
-			break
-		}
-	}
-	require.NotEmpty(t, enrichmentSubID, "Enrichment Pub/Sub subscription not found in provisioned resources")
-
-	// Get the analysis (BigQuery) subscription
-	analysisSubID := ""
-	for _, sub := range provisioned.PubSubSubscriptions {
-		if sub.ConsumerService == "analysis-service" {
-			analysisSubID = sub.Name
-			break
-		}
-	}
-	require.NotEmpty(t, analysisSubID, "Analysis Pub/Sub subscription not found in provisioned resources")
-
 	require.NotEmpty(t, provisioned.BigQueryTables, "Provisioning must return a BigQueryConfig table")
 	datasetID := provisioned.BigQueryTables[0].Dataset
 	tableID := provisioned.BigQueryTables[0].Name
 
-	log.Info().Str("raw_topic", rawTopicID).Str("enriched_topic", enrichedTopicID).Msg("Using Pub/Sub topics")
-	log.Info().Str("enrich_sub", enrichmentSubID).Str("analysis_sub", analysisSubID).Msg("Using Pub/Sub subscriptions")
 	log.Info().Str("dataset", datasetID).Str("table", tableID).Msg("Using BigQueryConfig resources")
 
 	// --- 5. Start Local Services & Load Generator ---

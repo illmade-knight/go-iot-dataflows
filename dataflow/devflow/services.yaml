@@ -1,0 +1,44 @@
+#
+# services.yaml for the development dataflow (devflow)
+#
+# This file defines all services and cloud resources required for the devflow.
+# The ServiceDirector will use this file to manage the environment.
+#
+
+# The default project ID to use when a more specific one isn't available
+# in the environment specs. For local testing, this can be a dummy value if
+# using emulators.
+default_project_id: "your-gcp-project-id"
+
+# Environment-specific configurations. The 'dev' environment is used for
+# local development and testing.
+environments:
+  dev:
+    project_id: "your-gcp-project-id"
+    # When running locally, we might not want teardown protection.
+    teardown_protection: false
+
+# A list of all microservices that are part of the overall system.
+services:
+  - name: "ingestion-service"
+    source_path: "dataflow/devflow/cmd/ingestion" # Path to the service's main package
+    min_instances: 1
+    health_check:
+      port: 8081
+      path: "/healthz"
+
+# Dataflows are logical groupings of services and resources.
+dataflows:
+  - name: "devflow-main"
+    description: "A simple dataflow for ingesting MQTT messages and publishing them to Pub/Sub."
+    service_names:
+      - "ingestion-service"
+    # This dataflow's resources are considered permanent in a dev context.
+    lifecycle:
+      strategy: "permanent"
+    # Resources required by the services in this dataflow.
+    resources:
+      topics:
+        - name: "dev-ingestion-topic"
+          producer_service: "ingestion-service"
+

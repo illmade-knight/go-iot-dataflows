@@ -1,12 +1,12 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/illmade-knight/go-iot-dataflows/builder/enrichment"
-	pkgen "github.com/illmade-knight/go-iot/pkg/enrichment" // Import for EnrichedMessage and NewMessageEnricher
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
@@ -30,10 +30,10 @@ func main() {
 	// The NewMessageEnricher function from the enrichment package perfectly matches
 	// the MessageEnricherFactory signature required by the service wrapper.
 	// We are instantiating the generic service to produce enrichment.EnrichedMessage.
-	enrichmentService, err := enrichment.NewEnrichmentServiceWrapper[pkgen.EnrichedMessage](
+	enrichmentService, err := enrichment.NewPublishMessageEnrichmentServiceWrapper(
 		cfg,
+		context.Background(),
 		log.Logger,
-		pkgen.NewMessageEnricher,
 	)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create Enrichment Service")

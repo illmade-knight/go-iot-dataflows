@@ -5,7 +5,6 @@ package e2e
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,25 +12,26 @@ import (
 	"testing"
 	"time"
 
+	bq "cloud.google.com/go/bigquery"
 	"cloud.google.com/go/firestore"
 	"cloud.google.com/go/pubsub"
 	"github.com/google/uuid"
 	"github.com/illmade-knight/go-iot/helpers/emulators"
 	"github.com/illmade-knight/go-iot/helpers/loadgen"
 	"github.com/illmade-knight/go-iot/pkg/servicemanager"
-	"github.com/illmade-knight/go-iot/pkg/types"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 )
 
 const (
-	generateEnrichedMessagesFor     = 2 * time.Second
-	enrichmentE2ELoadTestNumDevices = 3
-	enrichmentE2ELoadTestRate       = 1.0
+	generateEnrichedBigqueryMessagesFor = 5 * time.Second
+	enrichmentBigQueryTestNumDevices    = 3
+	enrichmentBigQueryTestRate          = 1.0
 )
 
-func TestEnrichmentE2E_HappyPath(t *testing.T) {
+func TestEnrichmentToBigQueryE2E(t *testing.T) {
 	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
 	if projectID == "" {
 		t.Skip("Skipping E2E test: GOOGLE_CLOUD_PROJECT env var must be set.")
@@ -40,24 +40,25 @@ func TestEnrichmentE2E_HappyPath(t *testing.T) {
 		log.Warn().Msg("GOOGLE_APPLICATION_CREDENTIALS not set, relying on Application Default Credentials (ADC).")
 		adcCheckCtx, adcCheckCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer adcCheckCancel()
-		_, errAdc := pubsub.NewClient(adcCheckCtx, projectID)
+		realPubSubClient, errAdc := pubsub.NewClient(adcCheckCtx, projectID)
 		if errAdc != nil {
-			t.Skipf("Skipping cloud test: ADC check failed: %v", errAdc)
+			t.Skipf("Skipping cloud test: ADC check failed: %v. Please configure ADC or set GOOGLE_APPLICATION_CREDENTIALS.", errAdc)
 		}
+		realPubSubClient.Close()
 	}
 
 	// --- Timing & Metrics Setup ---
 	timings := make(map[string]string)
 	testStart := time.Now()
 	var publishedCount int
-	var verifiedCount int
 	var expectedMessageCount int
 
 	t.Cleanup(func() {
 		timings["TotalTestDuration"] = time.Since(testStart).String()
 		timings["MessagesExpected"] = strconv.Itoa(expectedMessageCount)
 		timings["MessagesPublished(Actual)"] = strconv.Itoa(publishedCount)
-		timings["MessagesVerified(Actual)"] = strconv.Itoa(verifiedCount)
+		// For BQ, the verified count is always the published count if the test passes.
+		timings["MessagesVerified(Actual)"] = strconv.Itoa(publishedCount)
 
 		t.Log("\n--- Test Timing & Metrics Breakdown ---")
 		for name, d := range timings {
@@ -69,22 +70,30 @@ func TestEnrichmentE2E_HappyPath(t *testing.T) {
 	totalTestContext, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	logger := log.With().Str("test", "TestEnrichmentE2E_HappyPath").Logger()
+	logger := log.With().Str("test", "TestEnrichmentToBigQueryE2E").Logger()
 
 	// 1. Define unique resources for this test run.
 	runID := uuid.New().String()[:8]
-	dataflowName := fmt.Sprintf("enrichment-flow-%s", runID)
-	ingestionTopicID := fmt.Sprintf("enrich-ingest-topic-%s", runID)
-	enrichmentSubID := fmt.Sprintf("enrich-sub-%s", runID)
+	dataflowName := fmt.Sprintf("enrichment-bq-flow-%s", runID)
+	ingestionTopicID := fmt.Sprintf("enrich-bq-ingest-topic-%s", runID)
+	enrichmentSubID := fmt.Sprintf("enrich-bq-sub-%s", runID)
 
-	enrichedTopicID := fmt.Sprintf("enrich-output-topic-%s", runID)
-	verifierSubID := fmt.Sprintf("verifier-sub-%s", runID)
+	enrichedTopicID := fmt.Sprintf("enrich-bq-output-topic-%s", runID) // This topic will feed BigQuery
+	bigquerySubID := fmt.Sprintf("bq-sub-%s", runID)
 	firestoreCollection := fmt.Sprintf("devices-e2e-%s", runID)
 
+	uniqueDatasetID := fmt.Sprintf("dev_enriched_dataset_%s", runID)
+	uniqueTableID := fmt.Sprintf("dev_enriched_payloads_%s", runID)
+
 	// 2. Build the services definition in memory.
+	// The schemaIdentifier for the BigQuery table will be for the EnrichedTestPayload.
+	schemaIdentifier := "github.com/illmade-knight/go-iot-dataflows/dataflow/devflow/e2e.EnrichedTestPayload"
+
 	servicesConfig := &servicemanager.TopLevelConfig{
 		DefaultProjectID: projectID,
-		Environments:     map[string]servicemanager.EnvironmentSpec{"dev": {ProjectID: projectID}},
+		Environments: map[string]servicemanager.EnvironmentSpec{
+			"dev": {ProjectID: projectID},
+		},
 		Dataflows: []servicemanager.ResourceGroup{{
 			Name:      dataflowName,
 			Lifecycle: &servicemanager.LifecyclePolicy{Strategy: servicemanager.LifecycleStrategyEphemeral},
@@ -97,9 +106,18 @@ func TestEnrichmentE2E_HappyPath(t *testing.T) {
 						ConsumerService: "",
 					},
 					{
-						Name:            verifierSubID,
+						Name:            bigquerySubID,
 						Topic:           enrichedTopicID,
 						ConsumerService: "",
+					},
+				},
+				BigQueryDatasets: []servicemanager.BigQueryDataset{{Name: uniqueDatasetID}},
+				BigQueryTables: []servicemanager.BigQueryTable{
+					{
+						Name:                   uniqueTableID,
+						Dataset:                uniqueDatasetID,
+						SchemaSourceType:       "go_struct",
+						SchemaSourceIdentifier: schemaIdentifier,
 					},
 				},
 			},
@@ -107,6 +125,11 @@ func TestEnrichmentE2E_HappyPath(t *testing.T) {
 	}
 	servicesDef, err := servicemanager.NewInMemoryServicesDefinition(servicesConfig)
 	require.NoError(t, err)
+
+	// Define the schema registry for the director to understand the BigQuery schema
+	schemaRegistry := map[string]interface{}{
+		schemaIdentifier: EnrichedTestPayload{},
+	}
 
 	// 3. Setup dependencies: Emulators and Real Firestore Client
 	var opts []option.ClientOption
@@ -122,6 +145,10 @@ func TestEnrichmentE2E_HappyPath(t *testing.T) {
 	require.NoError(t, err)
 	defer fsClient.Close()
 
+	bqClient, err := bq.NewClient(totalTestContext, projectID, opts...)
+	require.NoError(t, err)
+	defer bqClient.Close()
+
 	// 4. Populate Firestore with enrichment data for all test devices.
 	devices, deviceToClientID, cleanupFirestore := setupEnrichmentTestData(
 		t,
@@ -129,14 +156,14 @@ func TestEnrichmentE2E_HappyPath(t *testing.T) {
 		fsClient,
 		firestoreCollection,
 		runID,
-		enrichmentE2ELoadTestNumDevices,
-		enrichmentE2ELoadTestRate,
+		enrichmentBigQueryTestNumDevices,
+		enrichmentBigQueryTestRate,
 	)
 	t.Cleanup(cleanupFirestore)
 
 	// 5. Start services and orchestrate resources.
 	start = time.Now()
-	directorService, directorURL := startServiceDirector(t, totalTestContext, logger, servicesDef)
+	directorService, directorURL := startServiceDirector(t, totalTestContext, logger, servicesDef, schemaRegistry)
 	t.Cleanup(directorService.Shutdown)
 	timings["ServiceStartup(Director)"] = time.Since(start).String()
 
@@ -153,22 +180,13 @@ func TestEnrichmentE2E_HappyPath(t *testing.T) {
 		teardownURL := directorURL + "/orchestrate/teardown"
 		req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, teardownURL, nil)
 		http.DefaultClient.Do(req)
+		// Also explicitly delete the BigQuery dataset with contents
+		ds := bqClient.Dataset(uniqueDatasetID)
+		if err := ds.DeleteWithContents(context.Background()); err != nil {
+			logger.Warn().Err(err).Str("dataset", uniqueDatasetID).Msg("Failed to delete BigQuery dataset during cleanup.")
+		}
 		timings["CloudResourceTeardown(Director)"] = time.Since(teardownStart).String()
 	})
-
-	// ok our manager should have set up this subscription - check it with a short context to make sure we don't hang
-	subContext, cancel := context.WithTimeout(totalTestContext, 10*time.Second)
-	defer cancel()
-	client, err := pubsub.NewClient(subContext, projectID)
-	defer client.Close()
-	require.NoError(t, err)
-	verifierSub := client.Subscription(verifierSubID)
-	ok, err := verifierSub.Exists(totalTestContext)
-	require.NoError(t, err)
-	require.True(t, ok)
-	if !ok {
-		logger.Fatal().Msg("no verifier subscription")
-	}
 
 	start = time.Now()
 	ingestionSvc, err := startAttributeIngestionService(t, logger, directorURL, mqttConn.EmulatorAddress, projectID, ingestionTopicID, dataflowName)
@@ -177,92 +195,63 @@ func TestEnrichmentE2E_HappyPath(t *testing.T) {
 	t.Cleanup(ingestionSvc.Shutdown)
 
 	start = time.Now()
-	// Call the enrichment service starter without a DLT topic for the happy path test.
 	enrichmentSvc, err := startEnrichmentService(t, totalTestContext, logger, directorURL, projectID, enrichmentSubID, enrichedTopicID, redisConn.EmulatorAddress, firestoreCollection, dataflowName)
 	require.NoError(t, err)
 	timings["ServiceStartup(Enrichment)"] = time.Since(start).String()
 	t.Cleanup(enrichmentSvc.Shutdown)
+
+	start = time.Now()
+	bqSvc, err := startEnrichedBigQueryService(t, logger, directorURL, projectID, bigquerySubID, uniqueDatasetID, uniqueTableID, dataflowName)
+	require.NoError(t, err)
+	timings["ServiceStartup(BigQuery)"] = time.Since(start).String()
+	t.Cleanup(bqSvc.Shutdown)
 	logger.Info().Msg("All services started successfully.")
 
-	// 6. Start the Pub/Sub verifier in the background.
-	verificationDone := make(chan struct{})
-	verifierReady := make(chan struct{})
-	expectedCountCh := make(chan int, 1)
-
-	// Define the validation function for enriched messages
-	enrichedMessageValidator := func(t *testing.T, msg *pubsub.Message) bool {
-		var enrichedPayload types.PublishMessage
-		if err := json.Unmarshal(msg.Data, &enrichedPayload); err != nil {
-			logger.Error().Err(err).Msg("Failed to unmarshal enriched message for verification.")
-			return false
-		}
-
-		if enrichedPayload.DeviceInfo == nil {
-			logger.Error().Msg("Enriched message missing DeviceInfo.")
-			return false
-		}
-
-		// Verify clientID
-		expectedClientID, clientIDFound := deviceToClientID[enrichedPayload.DeviceInfo.UID]
-		if !clientIDFound {
-			logger.Error().Str("device_id", enrichedPayload.DeviceInfo.UID).Msg("DeviceID not found in expected map during verification.")
-			return false
-		}
-		if enrichedPayload.DeviceInfo.Name != expectedClientID {
-			logger.Error().Str("expected_client_id", expectedClientID).Str("actual_client_id", enrichedPayload.DeviceInfo.Name).Msg("ClientID mismatch.")
-			return false
-		}
-
-		// Verify locationID and DeviceCategory (serviceTag)
-		if enrichedPayload.DeviceInfo.Location != "loc-456" {
-			logger.Error().Str("actual_location_id", enrichedPayload.DeviceInfo.Location).Msg("LocationID mismatch.")
-			return false
-		}
-		if enrichedPayload.DeviceInfo.ServiceTag != "cat-789" {
-			logger.Error().Str("actual_category", enrichedPayload.DeviceInfo.ServiceTag).Msg("DeviceCategory mismatch.")
-			return false
-		}
-		return true
-	}
-
-	verifyContext, cancelVerify := context.WithTimeout(context.Background(), 1*time.Minute)
-	defer cancelVerify()
-	go func() {
-		defer close(verificationDone)
-		// Signal that the verifier is ready to receive messages and expected count.
-		close(verifierReady)
-		verifiedCount = verifyPubSubMessages(t, logger, verifyContext, verifierSub, expectedCountCh, enrichedMessageValidator)
-	}()
-
-	// Wait until the verifier confirms its subscription is created.
-	<-verifierReady
-
-	// 7. Run Load Generator
-	generator := loadgen.NewLoadGenerator(loadgen.NewMqttClient(mqttConn.EmulatorAddress, "devices/+/data", 1, logger), devices, logger)
-	expectedMessageCount = generator.ExpectedMessagesForDuration(generateEnrichedMessagesFor)
-
+	// 6. Run Load Generator
 	loadgenStart := time.Now()
-	logger.Info().Int("expected_messages", expectedMessageCount).Msg("Starting MQTT load generator...")
+	logger.Info().Msg("Starting MQTT load generator...")
+	generator := loadgen.NewLoadGenerator(loadgen.NewMqttClient(mqttConn.EmulatorAddress, "devices/+/data", 1, logger), devices, logger)
+	expectedMessageCount = generator.ExpectedMessagesForDuration(generateEnrichedBigqueryMessagesFor)
 
-	publishedCount, err = generator.Run(context.Background(), generateEnrichedMessagesFor)
+	publishedCount, err = generator.Run(totalTestContext, generateEnrichedBigqueryMessagesFor)
 	require.NoError(t, err)
-
-	// Send the exact count to the waiting verifier.
-	expectedCountCh <- publishedCount
-	close(expectedCountCh)
-
 	timings["LoadGeneration"] = time.Since(loadgenStart).String()
 	logger.Info().Int("published_count", publishedCount).Msg("Load generator finished.")
 
-	//require.Equal(t, expectedMessageCount, publishedCount, "Load generator did not publish the expected number of messages.")
+	// 7. Verify results in BigQuery
+	verificationStart := time.Now()
+	logger.Info().Msg("Starting BigQuery verification...")
 
-	// 8. Wait for verification to complete.
-	logger.Info().Msg("Waiting for enrichment verification to complete...")
-	select {
-	case <-verificationDone:
-		timings["ProcessingAndVerificationLatency"] = time.Since(loadgenStart).String()
-		logger.Info().Msg("Verification successful!")
-	case <-totalTestContext.Done():
-		t.Fatal("Test timed out waiting for verification")
+	// Define the BigQuery validator for enriched data
+	enrichedBigQueryValidator := func(t *testing.T, iter *bq.RowIterator) error {
+		var rowCount int
+		for {
+			var row EnrichedTestPayload
+			err := iter.Next(&row)
+			if err == iterator.Done {
+				break
+			}
+			if err != nil {
+				return fmt.Errorf("failed to read BigQuery row: %w", err)
+			}
+			rowCount++
+
+			// Verify enrichment fields
+			expectedClientID, clientIDFound := deviceToClientID[row.DeviceID]
+			if !clientIDFound {
+				return fmt.Errorf("device ID %s not found in expected map during BQ verification", row.DeviceID)
+			}
+			require.Equal(t, expectedClientID, row.ClientID, "ClientID mismatch for device %s", row.DeviceID)
+			require.Equal(t, "loc-456", row.LocationID, "LocationID mismatch for device %s", row.DeviceID)
+			require.Equal(t, "cat-789", row.Category, "Category mismatch for device %s", row.DeviceID)
+		}
+		require.Equal(t, publishedCount, rowCount, "the final number of rows in BigQuery should match the number of messages published")
+		return nil
 	}
+
+	// Call the generic verifier with the enriched data validator.
+	verifyBigQueryRows(t, logger, totalTestContext, projectID, uniqueDatasetID, uniqueTableID, publishedCount, enrichedBigQueryValidator)
+
+	timings["VerificationDuration"] = time.Since(verificationStart).String()
+	timings["ProcessingAndVerificationLatency"] = time.Since(loadgenStart).String()
 }

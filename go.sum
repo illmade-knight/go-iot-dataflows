@@ -163,8 +163,8 @@ github.com/gorilla/websocket v1.5.3 h1:saDtZ6Pbx/0u+bgYQ3q96pZgCzfhKXGPqt7kZ72aN
 github.com/gorilla/websocket v1.5.3/go.mod h1:YR8l580nyteQvAITg2hZ9XVh4b55+EU/adAjf1fMHhE=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.0 h1:+epNPbD5EqgpEMm5wrl4Hqts3jZt8+kYaqUisuuIGTk=
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.0/go.mod h1:Zanoh4+gvIgluNqcfMVTJueD4wSS5hT7zTt4Mrutd90=
-github.com/illmade-knight/go-iot v0.0.7-alpha.4 h1:jqf/XecB4hIsPilzB2qICg6080QFeWpCku08hPm3RoA=
-github.com/illmade-knight/go-iot v0.0.7-alpha.4/go.mod h1:4lE/VKQCIXxFwACGgi81xQhh5K8Xi75Unm/tTaifkHo=
+github.com/illmade-knight/go-iot v0.0.15 h1:qs9XXob8ZdRa+ktN8klg5Hp4zyRbbGrQvowJC4uLY7c=
+github.com/illmade-knight/go-iot v0.0.15/go.mod h1:4lE/VKQCIXxFwACGgi81xQhh5K8Xi75Unm/tTaifkHo=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
 github.com/klauspost/compress v1.17.4 h1:Ej5ixsIri7BrIjBkRZLTo6ghwrEtHFk7ijlczPW4fZ4=

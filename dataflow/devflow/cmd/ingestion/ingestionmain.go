@@ -20,8 +20,6 @@ func main() {
 		log.Fatal().Err(err).Msg("Failed to load ingestion service config")
 	}
 
-	// --- Improved Logging ---
-	// Log key configuration values to show what the service is attempting to do.
 	log.Info().
 		Str("service_name", cfg.ServiceName).
 		Str("dataflow_name", cfg.DataflowName).
@@ -33,15 +31,15 @@ func main() {
 	} else {
 		log.Warn().Msg("ServiceDirectorURL is not configured. Skipping resource verification. This is not recommended for production.")
 	}
-	// --- End Improved Logging ---
 
-	// Create the IngestionService instance. The service name and dataflow name are
-	// passed in from its configuration. On creation, it will contact the
-	// ServiceDirectorURL (also from its config) to verify resources.
-	// The internal client has its own logging, but the fatal error here
-	// will now have more context from the logs above.
+	// CORRECTED: Instantiate the concrete extractor for this service instance.
+	extractor := NewDeviceIDExtractor()
+	log.Info().Msg("DeviceID attribute extractor has been enabled.")
+
+	// Create the IngestionService instance, now injecting the extractor.
 	ingestionService, err := ingestion.NewIngestionServiceWrapper(
 		cfg,
+		extractor, // Inject the extractor into the service builder.
 		log.Logger,
 		cfg.ServiceName,
 		cfg.DataflowName,

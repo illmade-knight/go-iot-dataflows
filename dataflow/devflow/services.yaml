@@ -1,7 +1,8 @@
 #
-# services.yaml for the development dataflow (devflow)
+# services.yaml for the full development dataflow (devflow)
 #
-# This file defines all services and cloud resources required for the devflow.
+# This file defines all services and cloud resources required for the full dataflow,
+# including ingestion, enrichment, BigQuery storage, and GCS archival.
 # The ServiceDirector will use this file to manage the environment.
 #
 
@@ -21,19 +22,41 @@ environments:
 # A list of all microservices that are part of the overall system.
 services:
   - name: "ingestion-service"
-    source_path: "dataflow/devflow/cmd/ingestion" # Path to the service's main package
+    source_path: "dataflow/devflow/cmd/ingestion"
     min_instances: 1
     health_check:
       port: 8081
+      path: "/healthz"
+  - name: "enrichment-service"
+    source_path: "dataflow/devflow/cmd/enrichment"
+    min_instances: 1
+    health_check:
+      port: 8082
+      path: "/healthz"
+  - name: "bigquery-service"
+    source_path: "dataflow/devflow/cmd/bigquery"
+    min_instances: 1
+    health_check:
+      port: 8080
+      path: "/healthz"
+  - name: "icestore-service"
+    source_path: "dataflow/devflow/cmd/icestore"
+    min_instances: 1
+    health_check:
+      port: 8083
       path: "/healthz"
 
 # Dataflows are logical groupings of services and resources.
 dataflows:
   - name: "devflow-main"
-    description: "A simple dataflow for ingesting MQTT messages and publishing them to Pub/Sub."
+    description: "Full dataflow for ingestion, enrichment, BigQuery storage, and GCS archival."
     service_names:
       - "ingestion-service"
-    # This dataflow's resources are considered permanent in a dev context.
+      - "enrichment-service"
+      - "bigquery-service"
+      - "icestore-service"
+    # For testing, the lifecycle strategy will be overridden to 'ephemeral'
+    # to ensure resources are cleaned up after the test run.
     lifecycle:
       strategy: "permanent"
     # Resources required by the services in this dataflow.
@@ -41,4 +64,37 @@ dataflows:
       topics:
         - name: "dev-ingestion-topic"
           producer_service: "ingestion-service"
+        - name: "dev-enriched-topic"
+          producer_service: "enrichment-service"
+
+      subscriptions:
+        # Subscription for the enrichment service to consume raw data.
+        - name: "dev-enrichment-sub"
+          topic: "dev-ingestion-topic"
+          consumer_service: "enrichment-service"
+
+        # Subscription for the icestore service to consume raw data in parallel.
+        - name: "dev-icestore-sub"
+          topic: "dev-ingestion-topic"
+          consumer_service: "icestore-service"
+
+        # Subscription for the bigquery service to consume enriched data.
+        - name: "dev-bq-sub"
+          topic: "dev-enriched-topic"
+          consumer_service: "bigquery-service"
+
+      # BigQuery resources for storing the final enriched data.
+      bigquery_datasets:
+        - name: "dev_dataflow_dataset"
+      bigquery_tables:
+        - name: "dev_enriched_payloads"
+          dataset: "dev_dataflow_dataset"
+          schema_source_type: "go_struct"
+          # This identifier must match the Go struct used in the test.
+          schema_source_identifier: "github.com/illmade-knight/go-iot-dataflows/dataflow/devflow/e2e.EnrichedTestPayload"
+
+      # GCS bucket resource for the archival service.
+      gcs_buckets:
+        - name: "dev-archive-bucket"
+          consumer_service: "icestore-service"
 

@@ -24,18 +24,24 @@ type IngestionServiceWrapper struct {
 
 // NewIngestionServiceWrapper creates and configures a new IngestionServiceWrapper.
 // It now performs a resource verification check against the ServiceDirector on startup.
-func NewIngestionServiceWrapper(cfg *Config, logger zerolog.Logger, serviceName string, dataflowName string) (*IngestionServiceWrapper, error) {
+// NewIngestionServiceWrapper creates and configures a new IngestionServiceWrapper.
+// It is now updated to accept an AttributeExtractor to enable attribute injection.
+func NewIngestionServiceWrapper(
+	cfg *Config,
+	extractor mqttconverter.AttributeExtractor, // CORRECTED: Added extractor parameter
+	logger zerolog.Logger,
+	serviceName string,
+	dataflowName string,
+) (*IngestionServiceWrapper, error) {
 	ctx := context.Background()
 	ingestionLogger := logger.With().Str("component", "IngestionService").Logger()
 
 	// --- Verify resources with ServiceDirector ---
 	if cfg.ServiceDirectorURL != "" {
-		// Use the client from the servicedirector package.
 		directorClient, err := servicedirector.NewClient(cfg.ServiceDirectorURL, ingestionLogger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create service director client: %w", err)
 		}
-		// This is a blocking call. The service will not start if verification fails.
 		if err := directorClient.VerifyDataflow(ctx, dataflowName, serviceName); err != nil {
 			return nil, fmt.Errorf("resource verification failed via ServiceDirector: %w", err)
 		}
@@ -69,7 +75,7 @@ func NewIngestionServiceWrapper(cfg *Config, logger zerolog.Logger, serviceName 
 
 	ingestionService := mqttconverter.NewIngestionService(
 		publisher,
-		nil, // No attribute extractor
+		extractor, // CORRECTED: Pass the provided extractor to the service.
 		ingestionLogger,
 		cfg.Service,
 		cfg.MQTT,

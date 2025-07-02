@@ -45,7 +45,8 @@ func main() {
 	loader := servicedirector.NewYAMLServicesDefinitionLoader(cfg.ServicesDefPath)
 
 	// Create the ServiceDirector instance.
-	director, err := servicedirector.NewServiceDirector(context.Background(), cfg, loader, log.Logger)
+	schemaRegistry := map[string]interface{}{}
+	director, err := servicedirector.NewServiceDirector(context.Background(), cfg, loader, schemaRegistry, log.Logger)
 	if err != nil {
 		log.Fatal().Err(err).Msg("Failed to create ServiceDirector")
 	}

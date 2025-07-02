@@ -123,7 +123,7 @@ func NewBQServiceWrapper[T any](
 // Start initiates the BQ processing service and the embedded HTTP server.
 func (s *BQServiceWrapper[T]) Start() error {
 	s.logger.Info().Msg("Starting generic BQ server components...")
-	if err := s.processingService.Start(); err != nil {
+	if err := s.processingService.Start(context.Background()); err != nil {
 		return fmt.Errorf("failed to start processing service: %w", err)
 	}
 	s.logger.Info().Msg("Data processing service started.")

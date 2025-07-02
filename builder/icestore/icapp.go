@@ -6,14 +6,14 @@ import (
 	"cloud.google.com/go/storage"
 	"context"
 	"fmt"
+	"os"
+	"strings"
+
 	"github.com/illmade-knight/go-iot-dataflows/builder"   // Import the builder for common interfaces
 	"github.com/illmade-knight/go-iot/pkg/icestore"        // Existing icestore package from go-iot
 	"github.com/illmade-knight/go-iot/pkg/messagepipeline" // For MetricReporter
 	"github.com/rs/zerolog"
 	"google.golang.org/api/option"
-	"net/http"
-	"os"
-	"strings"
 )
 
 // IceStoreServiceWrapper wraps the IceStorageService for a common interface.
@@ -31,60 +31,52 @@ type IceStoreServiceWrapper struct {
 // NewIceStoreServiceWrapper creates and configures a new IceStoreServiceWrapper instance.
 // It initializes all necessary components: GCS client, Pub/Sub client,
 // Pub/Sub consumer, GCS batch processor, and the core processing service.
-//
-// metricReporter: An optional interface to push metrics to an external monitoring system.
-// serviceName: The unique name of this service instance (e.g., "icestore-service").
-// dataflowName: The name of the dataflow this service is part of (e.g., "my-archive-dataflow").
-// These names are crucial for meaningful metric labeling.
-func NewIceStoreServiceWrapper(cfg *Config, logger zerolog.Logger,
-	serviceName string, dataflowName string, // Add serviceName and dataflowName
-) (*IceStoreServiceWrapper, error) {
+func NewIceStoreServiceWrapper(cfg *Config, logger zerolog.Logger) (*IceStoreServiceWrapper, error) {
 	ctx := context.Background() // Use a context that can be managed by the main lifecycle
+	isLogger := logger.With().Str("component", "IceStoreService").Logger()
 
-	// Determine GCP client options (credentials file or ADC) for Pub/Sub and GCS.
-	var opts []option.ClientOption
-	if cfg.CredentialsFile != "" { // General credentials file
-		opts = append(opts, option.WithCredentialsFile(cfg.CredentialsFile))
-		logger.Info().Str("credentials_file", cfg.CredentialsFile).Msg("Using specified credentials file for general GCP clients")
+	// Determine general GCP client options (credentials file or ADC).
+	var generalOpts []option.ClientOption
+	if cfg.CredentialsFile != "" {
+		generalOpts = append(generalOpts, option.WithCredentialsFile(cfg.CredentialsFile))
+		isLogger.Info().Str("credentials_file", cfg.CredentialsFile).Msg("Using specified general credentials file for GCP clients")
 	} else {
-		logger.Info().Msg("Using Application Default Credentials (ADC) for general GCP clients")
+		isLogger.Info().Msg("Using Application Default Credentials (ADC) for general GCP clients")
 	}
 
-	// Override options specifically for GCS if IceStore has its own credentials file.
-	var gcsOpts []option.ClientOption
-	gcsOpts = append(gcsOpts, opts...) // Start with general options
+	// --- GCS Client Initialization ---
+	gcsOpts := make([]option.ClientOption, len(generalOpts))
+	copy(gcsOpts, generalOpts)
 	if cfg.IceStore.CredentialsFile != "" {
 		gcsOpts = []option.ClientOption{option.WithCredentialsFile(cfg.IceStore.CredentialsFile)}
-		logger.Info().Str("credentials_file", cfg.IceStore.CredentialsFile).Msg("Using specified credentials file for GCS client (overriding general)")
+		isLogger.Info().Str("credentials_file", cfg.IceStore.CredentialsFile).Msg("Using service-specific credentials file for GCS client")
 	}
 
-	// Handle GCS emulator specific options if the environment variable is set
 	if emulatorHost := os.Getenv("STORAGE_EMULATOR_HOST"); emulatorHost != "" {
 		gcsOpts = append(gcsOpts, option.WithoutAuthentication(), option.WithEndpoint(emulatorHost))
-		logger.Info().Str("emulator_host", emulatorHost).Msg("Configuring GCS client for emulator.")
+		isLogger.Info().Str("emulator_host", emulatorHost).Msg("Configuring GCS client for emulator.")
 	}
 
-	// Create the GCS client.
 	gcsClient, err := storage.NewClient(ctx, gcsOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GCS client: %w", err)
 	}
 
-	// Create the Pub/Sub client.
-	var psOpts []option.ClientOption
-	psOpts = append(psOpts, opts...) // Start with general options
+	// --- Pub/Sub Client Initialization ---
+	psOpts := make([]option.ClientOption, len(generalOpts))
+	copy(psOpts, generalOpts)
 	if cfg.Consumer.CredentialsFile != "" {
 		psOpts = []option.ClientOption{option.WithCredentialsFile(cfg.Consumer.CredentialsFile)}
-		logger.Info().Str("credentials_file", cfg.Consumer.CredentialsFile).Msg("Using specified credentials file for Pub/Sub consumer (overriding general)")
+		isLogger.Info().Str("credentials_file", cfg.Consumer.CredentialsFile).Msg("Using service-specific credentials file for Pub/Sub consumer")
 	}
 
 	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID, psOpts...)
 	if err != nil {
-		gcsClient.Close() // Close GCS client on Pub/Sub client creation failure
+		gcsClient.Close()
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
 
-	// Create the Pub/Sub consumer.
+	// --- Service Component Creation ---
 	consumerCfg := &messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      cfg.ProjectID,
 		SubscriptionID: cfg.Consumer.SubscriptionID,
@@ -92,11 +84,10 @@ func NewIceStoreServiceWrapper(cfg *Config, logger zerolog.Logger,
 	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, logger)
 	if err != nil {
 		gcsClient.Close()
-		psClient.Close() // Close clients on consumer creation failure
+		psClient.Close()
 		return nil, fmt.Errorf("failed to create Pub/Sub consumer: %w", err)
 	}
 
-	// Create the GCS batch processor. This component handles writing batches of data to GCS.
 	batcher, err := icestore.NewGCSBatchProcessor(
 		icestore.NewGCSClientAdapter(gcsClient),
 		&icestore.BatcherConfig{
@@ -115,8 +106,6 @@ func NewIceStoreServiceWrapper(cfg *Config, logger zerolog.Logger,
 		return nil, fmt.Errorf("failed to create GCS batch processor: %w", err)
 	}
 
-	// Assemble the core processing service.
-	// Pass the metricReporter and service/dataflow names here for metric labeling.
 	processingService, err := icestore.NewIceStorageService(
 		cfg.BatchProcessing.NumWorkers,
 		consumer,
@@ -127,25 +116,20 @@ func NewIceStoreServiceWrapper(cfg *Config, logger zerolog.Logger,
 	if err != nil {
 		gcsClient.Close()
 		psClient.Close()
-		batcher.Stop() // Ensure batcher is closed on failure
+		batcher.Stop()
 		return nil, fmt.Errorf("failed to create processing service: %w", err)
 	}
 
-	// Setup HTTP handler for health checks and embed it in BaseServer.
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", builder.HealthzHandler)
-	mux.HandleFunc("/healthz", builder.HealthzHandler)
-
-	baseServer := builder.NewBaseServer(logger, cfg.HTTPPort, mux)
+	baseServer := builder.NewBaseServer(logger, cfg.HTTPPort)
 
 	return &IceStoreServiceWrapper{
 		BaseServer:        baseServer,
 		processingService: processingService,
 		pubsubClient:      psClient,
 		gcsClient:         gcsClient,
-		logger:            logger,
-		bucketName:        cfg.IceStore.BucketName, // Store for bucket creation/deletion
-		projectID:         cfg.ProjectID,           // Store for bucket creation/deletion
+		logger:            isLogger,
+		bucketName:        cfg.IceStore.BucketName,
+		projectID:         cfg.ProjectID,
 	}, nil
 }
 
@@ -154,51 +138,47 @@ func NewIceStoreServiceWrapper(cfg *Config, logger zerolog.Logger,
 func (s *IceStoreServiceWrapper) Start() error {
 	s.logger.Info().Msg("Starting IceStore server components...")
 
-	// Attempt to create the GCS bucket. In a production scenario, this might be
-	// handled by infrastructure-as-code (e.g., ServiceDirector setup).
-	// This is defensive for local testing/rapid prototyping.
-	s.logger.Info().Str("bucket", s.bucketName).Msg("Attempting to create GCS bucket (if it doesn't exist).")
+	// Attempt to create the GCS bucket. In production, this should be handled
+	// by IaC (e.g., via ServiceDirector). This is for local/dev convenience.
+	s.logger.Info().Str("bucket", s.bucketName).Msg("Ensuring GCS bucket exists.")
 	if err := s.gcsClient.Bucket(s.bucketName).Create(context.Background(), s.projectID, nil); err != nil {
-		// Ignore if bucket already exists error, but log others
+		// Ignore "already exists" errors, but log others as a warning.
 		if !strings.Contains(err.Error(), "You already own this bucket") && !strings.Contains(err.Error(), "bucket already exists") {
-			s.logger.Warn().Err(err).Str("bucket", s.bucketName).Msg("Failed to create GCS bucket, continuing anyway (might be pre-existing).")
+			s.logger.Warn().Err(err).Str("bucket", s.bucketName).Msg("Failed to create GCS bucket; please ensure it exists.")
 		} else {
 			s.logger.Info().Str("bucket", s.bucketName).Msg("GCS bucket already exists.")
 		}
 	}
 
-	if err := s.processingService.Start(); err != nil {
+	if err := s.processingService.Start(context.Background()); err != nil {
 		return fmt.Errorf("failed to start processing service: %w", err)
 	}
 	s.logger.Info().Msg("Data processing service started.")
-	return s.BaseServer.Start() // Start the HTTP server from the BaseServer
+	return s.BaseServer.Start()
 }
 
 // Shutdown gracefully stops the IceStore processing service and the embedded HTTP server.
-// It also closes all associated clients.
 func (s *IceStoreServiceWrapper) Shutdown() {
 	s.logger.Info().Msg("Shutting down IceStore server components...")
-	s.processingService.Stop() // Stop the core processing logic
+	s.processingService.Stop()
 	s.logger.Info().Msg("Data processing service stopped.")
-	s.BaseServer.Shutdown() // Shut down the HTTP server from the BaseServer
+	s.BaseServer.Shutdown()
 
-	// Close clients
 	if s.pubsubClient != nil {
-		s.pubsubClient.Close()
+		if err := s.pubsubClient.Close(); err != nil {
+			s.logger.Error().Err(err).Msg("Error closing Pub/Sub client.")
+		}
 		s.logger.Info().Msg("Pub/Sub client closed.")
 	}
 	if s.gcsClient != nil {
-		s.gcsClient.Close()
+		if err := s.gcsClient.Close(); err != nil {
+			s.logger.Error().Err(err).Msg("Error closing GCS client.")
+		}
 		s.logger.Info().Msg("GCS client closed.")
 	}
 }
 
-// GetHTTPHandler returns the HTTP handler for the service, inherited from BaseServer.
-func (s *IceStoreServiceWrapper) GetHTTPHandler() http.Handler {
-	return s.BaseServer.GetHandler()
-}
-
-// GetHTTPPort returns the HTTP port the service is listening on, inherited from BaseServer.
+// GetHTTPPort returns the HTTP port the service is listening on.
 func (s *IceStoreServiceWrapper) GetHTTPPort() string {
 	return s.BaseServer.GetHTTPPort()
 }

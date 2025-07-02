@@ -40,7 +40,7 @@ type Config struct {
 	ServiceDirectorURL string `mapstructure:"service_director_url"`
 
 	Consumer        Consumer                                    `mapstructure:"consumer"`
-	Producer        *messagepipeline.GooglePubsubProducerConfig `mapstructure:"producer"`
+	ProducerConfig  *messagepipeline.GooglePubsubProducerConfig `mapstructure:"producer"`
 	CacheConfig     CacheConfig                                 `mapstructure:"cache"`
 	ProcessorConfig ProcessorConfig                             `mapstructure:"processor"`
 }
@@ -67,7 +67,7 @@ func LoadConfigFromEnv() (*Config, error) {
 		cfg.HTTPPort = ":" + port
 	}
 
-	if cfg.ProjectID == "" || cfg.ServiceName == "" || cfg.DataflowName == "" || cfg.Consumer.SubscriptionID == "" || cfg.Producer.TopicID == "" || cfg.CacheConfig.RedisConfig.Addr == "" || cfg.CacheConfig.FirestoreConfig.CollectionName == "" {
+	if cfg.ProjectID == "" || cfg.ServiceName == "" || cfg.DataflowName == "" || cfg.Consumer.SubscriptionID == "" || cfg.ProducerConfig.TopicID == "" || cfg.CacheConfig.RedisConfig.Addr == "" || cfg.CacheConfig.FirestoreConfig.CollectionName == "" {
 		return nil, fmt.Errorf("missing required configuration environment variables (e.g., APP_PROJECT_ID, APP_SERVICE_NAME, APP_CONSUMER_SUBSCRIPTION_ID, APP_PRODUCER_TOPIC_ID, etc.)")
 	}
 	return &cfg, nil

@@ -13,3 +13,5 @@ Always show code in full - I do not like snippets or code that contains comments
 "the implementation remains the same" and then skips showing the original code.
 
 could you always check for .comcom errors in imports these seem very common and are annoying
+
+when testing prefer using channels or sync to using time.sleep() or delays to solve race conditions from timing

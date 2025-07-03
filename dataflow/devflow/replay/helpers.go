@@ -15,6 +15,16 @@ import (
 	"google.golang.org/api/iterator"
 )
 
+type rawFilePayload struct {
+	ID                    string `json:"id"`
+	OriginalPubsubPayload struct {
+		DeviceID  string    `json:"device_id"`
+		Timestamp time.Time `json:"timestamp"`
+		Value     float64   `json:"value"`
+	} `json:"original_pubsub_payload"`
+	ArchivedAt time.Time `json:"archived_at"`
+}
+
 // ReadMessagesFromGCS reads gzipped JSON messages from a GCS bucket.
 // It assumes the messages are in a format from which a deviceID can be extracted
 // and groups them by device ID.
@@ -30,6 +40,7 @@ func ReadMessagesFromGCS(
 	replayLogger := logger.With().Str("component", "GCSReplayReader").Str("bucket", bucketName).Logger()
 
 	bucket := gcsClient.Bucket(bucketName)
+
 	it := bucket.Objects(ctx, nil) // Iterate through all objects in the bucket
 
 	for {
@@ -59,20 +70,18 @@ func ReadMessagesFromGCS(
 		for scanner.Scan() {
 			rawPayload := scanner.Bytes()
 			// To extract deviceID for grouping, we need to unmarshal just enough.
-			var tempPayload struct {
-				DeviceID string `json:"deviceID"`
-			}
+			var tempPayload rawFilePayload
 			if err := json.Unmarshal(rawPayload, &tempPayload); err != nil {
 				replayLogger.Warn().Err(err).Str("line", scanner.Text()).Msg("Failed to unmarshal JSON to get deviceID, skipping.")
 				continue
 			}
 
-			if tempPayload.DeviceID == "" {
+			if tempPayload.OriginalPubsubPayload.DeviceID == "" {
 				replayLogger.Warn().Str("line", scanner.Text()).Msg("Payload missing deviceID, skipping.")
 				continue
 			}
 
-			deviceMessages[tempPayload.DeviceID] = append(deviceMessages[tempPayload.DeviceID], rawPayload)
+			deviceMessages[tempPayload.OriginalPubsubPayload.DeviceID] = append(deviceMessages[tempPayload.OriginalPubsubPayload.DeviceID], rawPayload)
 		}
 		if err := scanner.Err(); err != nil {
 			replayLogger.Warn().Err(err).Str("object", attrs.Name).Msg("Error reading GCS object with scanner.")

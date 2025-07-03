@@ -29,7 +29,7 @@ import (
 const (
 	replayToBigqueryMessagesFor = 5 * time.Second // Duration over which to replay messages
 
-	replayBucket = "gs://icestore-bucket-44f1e235"
+	replayBucket = "icestore-bucket-42157a09"
 )
 
 func TestReplayToSimpleBigqueryFlowE2E(t *testing.T) {
@@ -144,6 +144,15 @@ func TestReplayToSimpleBigqueryFlowE2E(t *testing.T) {
 
 	// 4. Read messages from the EXISTING GCS bucket using the replay helper
 	logger.Info().Str("bucket", sourceGCSBucketName).Msg("Reading messages from GCS for replay...")
+
+	bucketCheckCtx, cancel := context.WithTimeout(totalTestContext, time.Second*25)
+	bucket := gcsClient.Bucket(sourceGCSBucketName)
+
+	attrs, err := bucket.Attrs(bucketCheckCtx)
+	require.NoError(t, err)
+	logger.Info().Str("attr", attrs.Name).Msg("Reading messages from GCS")
+	cancel()
+
 	deviceMessagesToReplay, err := replay.ReadMessagesFromGCS(t, totalTestContext, logger, gcsClient, sourceGCSBucketName)
 	require.NoError(t, err, "Failed to read messages from GCS bucket %s", sourceGCSBucketName)
 

@@ -1,0 +1,96 @@
+# deployer_config.yaml
+# This file defines the orchestrator's operational parameters and deployment defaults,
+# including service-specific overrides.
+
+project_id: your-gcp-project-id
+region: europe-west1 # Default region for Cloud Run deployments
+
+# Path to the services definition YAML file (e.g., services.yaml)
+services_definition_path: services.yaml
+
+# Default Docker registry where images will be pushed (e.g., gcr.io/your-gcp-project-id)
+default_docker_registry: gcr.io/your-gcp-project-id
+
+# Base path where your Go microservice source code directories are located.
+# The orchestrator will look for individual service folders within this path.
+# Example: If your services are in `./services/svc-ingestor/cmd/main.go`, this should be `./services`.
+services_source_base_path: ./services
+
+# The name of the service that acts as the ServiceDirector.
+# This service will be deployed first, and its URL passed to other services.
+service_director_service_name: svc-director
+
+# --- Global Cloud Run Defaults ---
+# These settings apply to all Cloud Run services unless overridden by a service-specific
+# configuration in the 'services' section below.
+cloud_run_defaults:
+  cpu: "1000m"            # 1 vCPU
+  memory: "512Mi"         # 512 Megabytes
+  concurrency: 80         # Maximum concurrent requests per instance
+  min_instances: 0        # Minimum number of instances (for cold start optimization)
+  max_instances: 10       # Maximum number of instances for autoscaling
+  timeout_seconds: 300    # Request timeout in seconds (5 minutes)
+  service_account: ""     # Default is Cloud Run default service account.
+  # Set a global default here if most services use the same non-default SA.
+  env_vars:               # Global environment variables applied to all services
+    GLOBAL_DEBUG: "false"
+    COMMON_SETTING: "value"
+  startup_probe:
+    path: "/health/startup"
+    port: 8080
+    initial_delay: 1s
+    period: 5s
+    timeout: 2s
+    failure_threshold: 5
+  liveness_probe:
+    path: "/health/liveness"
+    port: 8080
+    initial_delay: 1s
+    period: 10s
+    timeout: 5s
+    failure_threshold: 3
+
+# This field will be populated by the orchestrator after the director is deployed.
+# You can override it here for specific testing scenarios if the director is already deployed externally.
+# director_service_url: "https://svc-director-xyz-ew.a.run.app"
+
+# --- Service-Specific Deployment Overrides ---
+# This section allows you to provide build and deployment overrides for individual services.
+# The keys here must match the 'name' field of services defined in your services.yaml.
+services:
+  svc-director:
+    # Example: director might need a specific Dockerfile path if it's not "Dockerfile"
+    # dockerfile_path: "build/director.Dockerfile"
+    cloud_run_spec:
+      min_instances: 1 # Ensure the director is always warm
+      max_instances: 2
+      timeout_seconds: 600 # Director might have longer-running tasks
+      service_account: svc-director-sa@your-gcp-project-id.iam.gserviceaccount.com # Dedicated SA for director
+      env_vars:
+        SERVICE_DIRECTOR_MODE: "production"
+
+  svc-ingestor:
+    main_path: "cmd/ingestor/main.go" # Specify main.go path if not default "cmd/main.go"
+    cloud_run_spec:
+      cpu: "2000m"  # Ingestor needs more CPU
+      memory: "1Gi" # Ingestor needs more memory
+      min_instances: 1
+      max_instances: 20
+      service_account: svc-ingestor-sa@your-gcp-project-id.iam.gserviceaccount.com # Dedicated SA for ingestor
+      env_vars: # Environment variables specific to the ingestor, will merge/override global env_vars
+        INGESTION_RATE_LIMIT: "1000"
+        LOG_LEVEL: "info" # Override global debug for this service
+
+  svc-processor:
+    dockerfile_path: "Processor.Dockerfile" # Custom Dockerfile name for processor
+    cloud_run_spec:
+      concurrency: 100 # Processor can handle more concurrent requests
+      service_account: svc-processor-sa@your-gcp-project-id.iam.gserviceaccount.com # Dedicated SA for processor
+      env_vars:
+        BIGQUERY_BATCH_SIZE: "100"
+
+  svc-archiver:
+    # No specific build path overrides needed.
+    cloud_run_spec:
+      service_account: svc-archiver-sa@your-gcp-project-id.iam.gserviceaccount.com # Dedicated SA for archiver
+      # No other Cloud Run overrides needed; it will use global defaults for CPU, memory, etc.

@@ -27,6 +27,8 @@ cloud.google.com/go/monitoring v1.24.2 h1:5OTsoJ1dXYIiMiuL+sYscLc9BumrL3CarVLL7d
 cloud.google.com/go/monitoring v1.24.2/go.mod h1:x7yzPWcgDRnPEv3sI+jJGBkwl5qINf+6qY4eq0I9B4U=
 cloud.google.com/go/pubsub v1.49.0 h1:5054IkbslnrMCgA2MAEPcsN3Ky+AyMpEZcii/DoySPo=
 cloud.google.com/go/pubsub v1.49.0/go.mod h1:K1FswTWP+C1tI/nfi3HQecoVeFvL4HUOB1tdaNXKhUY=
+cloud.google.com/go/run v1.10.1 h1:MbP5yejLol5IagqF5TYnU7JNXR5UhzCqPZ9OMZXr5c0=
+cloud.google.com/go/run v1.10.1/go.mod h1:aQWMoB2SNXQJUYIOeLRCacO/2VwdSO9FxpM6jxrimAo=
 cloud.google.com/go/storage v1.55.0 h1:NESjdAToN9u1tmhVqhXCaCwYBuvEhZLLv0gBr+2znf0=
 cloud.google.com/go/storage v1.55.0/go.mod h1:ztSmTTwzsdXe5syLVS0YsbFxXuvEmEyZj7v7zChEmuY=
 cloud.google.com/go/trace v1.11.6 h1:2O2zjPzqPYAHrn3OKl029qlqG6W8ZdYaOWRyr8NgMT4=
@@ -388,6 +390,8 @@ gonum.org/v1/gonum v0.12.0 h1:xKuo6hzt+gMav00meVPUlXwSdoEJP46BR+wdxQEFK2o=
 gonum.org/v1/gonum v0.12.0/go.mod h1:73TDxJfAAHeA8Mk9mf8NlIppyhQNo5GLTcYeqgo2lvY=
 google.golang.org/api v0.239.0 h1:2hZKUnFZEy81eugPs4e2XzIJ5SOwQg0G82bpXD65Puo=
 google.golang.org/api v0.239.0/go.mod h1:cOVEm2TpdAGHL2z+UwyS+kmlGr3bVWQQ6sYEqkKje50=
+google.golang.org/api v0.240.0 h1:PxG3AA2UIqT1ofIzWV2COM3j3JagKTKSwy7L6RHNXNU=
+google.golang.org/api v0.240.0/go.mod h1:cOVEm2TpdAGHL2z+UwyS+kmlGr3bVWQQ6sYEqkKje50=
 google.golang.org/appengine v1.1.0/go.mod h1:EbEs0AVv82hx2wNQdGPgUI5lhzA/G0D9YwlJXL52JkM=
 google.golang.org/appengine v1.4.0/go.mod h1:xpcJRLb0r/rnEns0DIKYYv+WjYCduHsrkT7/EB5XEv4=
 google.golang.org/genproto v0.0.0-20180817151627-c66870c02cf8/go.mod h1:JiN7NxoALGmiZfu7CAH4rXhgtRTLTxftemlI0sWmxmc=

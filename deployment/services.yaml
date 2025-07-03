@@ -1,0 +1,114 @@
+# services.yaml
+# This file defines the logical services and the cloud resources they interact with,
+# organized into dataflows. It is loaded by the servicemanager.
+
+# --- Global Configuration (from servicemanager.TopLevelConfig) ---
+name: iot-telemetry-pipeline
+description: End-to-end IoT data processing pipeline for device telemetry.
+
+# Default GCP project, location, and region for resources and services
+default_project_id: your-gcp-project-id
+default_location: europe-west1  # Geographic location for regional resources (e.g., BigQuery datasets, GCS buckets)
+default_region: europe-west1    # Region for compute resources (e.g., Cloud Run services)
+
+# List of all logical service names managed by this configuration.
+# The orchestrator will iterate through this list for deployment and teardown.
+service_names:
+  - svc-director
+  - svc-ingestor
+  - svc-processor
+  - svc-archiver
+
+# --- Dataflows (Logical Groupings of Services and Resources) ---
+# Each dataflow represents a coherent set of services and the resources they use.
+# This structure helps in organizing deployments and applying lifecycle policies.
+dataflows:
+  - name: core-telemetry-dataflow
+    description: Handles ingestion, processing, and archiving of device telemetry data.
+    # Services belonging to this specific dataflow
+    service_names:
+      - svc-ingestor
+      - svc-processor
+      - svc-archiver
+    # Lifecycle policy for resources and services within this dataflow.
+    # "ephemeral" will cause the orchestrator to tear down resources and services
+    # when the orchestrator's `Teardown` method is called (e.g., after an e2e test).
+    # "permanent" means the orchestrator will not delete these resources.
+    lifecycle:
+      strategy: ephemeral
+    # Define resources required by services in this dataflow.
+    resources:
+      pubsub_topics:
+        - name: device-telemetry-events
+          # schema_name: telemetry-event-schema # If you integrate with Schema Registry
+          accessing_services:
+            - svc-ingestor  # Publishes messages
+            - svc-processor # Subscribes to messages
+            - svc-archiver  # Subscribes to messages
+      bigquery_datasets:
+        - name: iot_data
+          location: europe-west1
+          tables:
+            - name: enriched_telemetry
+              # Define BigQuery table schema inline.
+              # In a real scenario, this might be loaded from a separate schema file or inferred.
+              schema:
+                - name: deviceId
+                  type: STRING
+                  mode: REQUIRED
+                - name: timestamp
+                  type: TIMESTAMP
+                  mode: REQUIRED
+                - name: temperature
+                  type: FLOAT
+                  mode: NULLABLE
+                - name: humidity
+                  type: FLOAT
+                  mode: NULLABLE
+                - name: clientID
+                  type: STRING # Added by enrichment service
+                  mode: NULLABLE
+                - name: locationID
+                  type: STRING # Added by enrichment service
+                  mode: NULLABLE
+                - name: category
+                  type: STRING # Added by enrichment service
+                  mode: NULLABLE
+              time_partitioning:
+                type: DAY # Partition by day for efficient querying
+              accessing_services:
+                - svc-processor # Writes processed data to this table
+      gcs_buckets:
+        - name: iot-data-archive-your-gcp-project-id # GCS bucket names must be globally unique across ALL GCP projects
+          location: europe-west1
+          storage_class: STANDARD
+          versioning_enabled: true
+          # Define lifecycle rules for the bucket (e.g., delete objects after 365 days)
+          lifecycle_rules:
+            - action: { type: Delete }
+              condition: { age_days: 365 }
+          accessing_services:
+            - svc-archiver # Archives raw data to this bucket
+
+# --- Environments (Optional: for environment-specific overrides) ---
+# You can define different environments and apply specific configurations (e.g., env vars)
+# when deploying to that environment.
+environments:
+  - name: dev
+    config:
+      env_var_override:
+        LOG_LEVEL: "debug"
+        FEATURE_FLAG_X: "true"
+  - name: prod
+    config:
+      env_var_override:
+        LOG_LEVEL: "info"
+        FEATURE_FLAG_X: "false"
+
+# --- Logical Service Definitions (for servicemanager.ServiceSpec) ---
+# As per our discussion, ServiceSpec holds NO deployment information.
+# It defines the logical properties of your services.
+# The `service_names` list at the top implicitly defines these services by name.
+# If you had more complex logical properties for a service, they would be structured
+# here, possibly as a map `services: { service-name: { name: ..., description: ... } }`
+# For this example, we assume `servicemanager.ServiceSpec` only requires the `name`.

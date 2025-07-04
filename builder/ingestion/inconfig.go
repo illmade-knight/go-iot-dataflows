@@ -79,7 +79,7 @@ func LoadConfigFromEnv() (*Config, error) {
 // and testing, using a hierarchy of defaults -> config file -> env vars -> flags.
 func LoadConfigWithOverrides() (*Config, error) {
 	v := viper.New()
-	pflag.String("config", "", "Path to config file (e.g., config-ingestion.yaml)")
+	pflag.String("config", "", "ServiceSourcePath to config file (e.g., config-ingestion.yaml)")
 
 	setDevelopmentDefaults(v)
 
@@ -142,9 +142,9 @@ func defineFlags(fs *pflag.FlagSet) {
 	fs.String("service-name", "", "Unique name of this service instance")
 	fs.String("dataflow-name", "", "Dataflow this service belongs to")
 	fs.String("service-director-url", "", "URL of the ServiceDirector API")
-	fs.String("credentials-file", "", "Path to general GCP credentials JSON file")
+	fs.String("credentials-file", "", "ServiceSourcePath to general GCP credentials JSON file")
 	fs.String("publisher.topic-id", "", "Google Pub/Sub Topic ID")
-	fs.String("publisher.credentials-file", "", "Path to publisher-specific credentials file")
+	fs.String("publisher.credentials-file", "", "ServiceSourcePath to publisher-specific credentials file")
 	fs.String("mqtt.broker-url", "", "MQTT Broker URL")
 	fs.String("mqtt.topic", "", "MQTT Topic to subscribe to")
 	fs.String("mqtt.username", "", "MQTT Username")

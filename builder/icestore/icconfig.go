@@ -83,7 +83,7 @@ func LoadConfigFromEnv() (*Config, error) {
 // LoadConfigWithOverrides provides a flexible way to load configuration for development and testing.
 func LoadConfigWithOverrides() (*Config, error) {
 	v := viper.New()
-	pflag.String("config", "", "Path to config file (e.g., config-icestore.yaml)")
+	pflag.String("config", "", "ServiceSourcePath to config file (e.g., config-icestore.yaml)")
 
 	setDevelopmentDefaults(v)
 
@@ -143,16 +143,16 @@ func defineFlags(fs *pflag.FlagSet) {
 	fs.String("log-level", "", "Log level")
 	fs.String("http-port", "", "HTTP health check port")
 	fs.String("project-id", "", "GCP Project ID")
-	fs.String("credentials-file", "", "Path to general GCP credentials JSON file")
+	fs.String("credentials-file", "", "ServiceSourcePath to general GCP credentials JSON file")
 
 	fs.String("service-name", "", "Unique name of this service instance")
 	fs.String("dataflow-name", "", "Dataflow this service belongs to")
 	fs.String("service-director-url", "", "URL of the ServiceDirector API")
 
 	fs.String("consumer.subscription-id", "", "Pub/Sub Subscription ID to consume from")
-	fs.String("consumer.credentials-file", "", "Path to Pub/Sub credentials JSON file for consumer")
+	fs.String("consumer.credentials-file", "", "ServiceSourcePath to Pub/Sub credentials JSON file for consumer")
 
-	fs.String("ice_store.credentials-file", "", "Path to GCS credentials JSON file")
+	fs.String("ice_store.credentials-file", "", "ServiceSourcePath to GCS credentials JSON file")
 	fs.String("ice_store.bucket-name", "", "Google Cloud Storage bucket name for archival")
 	fs.String("ice_store.object-prefix", "", "Prefix for objects in GCS bucket")
 

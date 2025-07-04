@@ -49,13 +49,13 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("firestore.collection_path", "service-definitions") // Default Firestore collection path
 
 	// --- 2. Set up pflag for command-line overrides ---
-	pflag.String("config", "", "Path to ServiceDirector config file (e.g., director-config.yaml)")
+	pflag.String("config", "", "ServiceSourcePath to ServiceDirector config file (e.g., director-config.yaml)")
 	pflag.String("log-level", "", "Log level (debug, info, warn, error)")
 	pflag.String("http-port", "", "HTTP health check port for ServiceDirector")
 	pflag.String("project-id", "", "GCP Project ID for ServiceDirector's own operations")
-	pflag.String("credentials-file", "", "Path to GCP credentials JSON file for ServiceDirector's own GCP clients")
+	pflag.String("credentials-file", "", "ServiceSourcePath to GCP credentials JSON file for ServiceDirector's own GCP clients")
 	pflag.String("services-def-source-type", "", "Source type for service definitions (yaml or firestore)")
-	pflag.String("services-def-path", "", "Path to services definition YAML file")
+	pflag.String("services-def-path", "", "ServiceSourcePath to services definition YAML file")
 	pflag.String("environment", "", "Operational environment (e.g., dev, prod)")
 	pflag.String("firestore-collection-path", "", "Firestore collection path for service definitions")
 

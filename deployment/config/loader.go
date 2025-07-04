@@ -1,86 +1,82 @@
-// deployer/config/loader.go
 package config
 
 import (
 	"fmt"
-	"strings"
+	"github.com/illmade-knight/go-iot-dataflows/builder/servicedirector"
+	"github.com/illmade-knight/go-iot/pkg/servicemanager"
+	"os"
+	"time"
 
 	"github.com/rs/zerolog"
-	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
-// LoadConfig loads the deployer configuration from various sources.
-// It prioritizes command-line flags, then environment variables, then config files, then defaults.
-func LoadConfig(logger zerolog.Logger) (*DeployerConfig, error) {
-	v := viper.New()
+func LoadServicesConfig(logger zerolog.Logger, v *viper.Viper) (*servicemanager.TopLevelConfig, error) {
+	configPath := v.GetString("services")
+	// 4. Load services definition using the 'servicedirector' to avoid code duplication
+	servicesDefinition, err := servicedirector.NewServicesDefinitionFromYAML(configPath) // Correct call as specified by user
+	if err != nil {
+		return nil, err
+	}
 
-	// --- 1. Set up command-line flags ---
-	pflag.String("config", "", "Path to the deployer configuration YAML file")
-	pflag.String("project-id", "", "Google Cloud Project ID for deployment")
-	pflag.String("region", "", "Google Cloud region for deployments")
-	pflag.String("services-definition-path", "services.yaml", "Path to the services definition YAML file")
-	pflag.String("default-docker-registry", "", "Default Docker registry for images (e.g., gcr.io/your-project-id)")
-	pflag.String("director-service-url", "", "URL of the Service Director application")
+	projectID := v.GetString("project_id")
+	topLevelConfig, err := servicesDefinition.GetTopLevelConfig()
+	if err != nil {
+		return nil, err
+	}
+	if topLevelConfig.DefaultProjectID == "" {
+		topLevelConfig.DefaultProjectID = projectID
+	}
+	return topLevelConfig, nil
+}
 
-	pflag.Parse()
-	_ = v.BindPFlags(pflag.CommandLine) // Bind AFTER parsing
+// LoadDeploymentConfig loads the deployer configuration.
+func LoadDeploymentConfig(logger zerolog.Logger, v *viper.Viper) (*DeployerConfig, error) {
+	configPath := v.GetString("deploy")
 
-	// --- 2. Set up Viper to read from file ---
-	configFile := v.GetString("config")
-	if configFile != "" {
-		v.SetConfigFile(configFile)
-		v.SetConfigType("yaml")
-		if err := v.ReadInConfig(); err != nil {
-			if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-				logger.Warn().Err(err).Str("config_file", configFile).Msg("Failed to read deployer config file, using defaults/flags/environment variables.")
-			}
+	cfg := &DeployerConfig{}
+	projectID := v.GetString("project-id")
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			logger.Warn().Str("config_path", configPath).Msg("Deployer config file not found, initializing with defaults.")
+		} else {
+			return nil, fmt.Errorf("failed to read deployer config file %s: %w", configPath, err)
 		}
+	} else {
+		if err := yaml.Unmarshal(data, cfg); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal deployer config from %s: %w", configPath, err)
+		}
+		logger.Info().Str("config_path", configPath).Msg("Deployer config file loaded.")
 	}
 
-	// --- 3. Set up environment variable support ---
-	v.SetEnvPrefix("DEPLOYER") // Using "DEPLOYER" prefix for orchestrator config
-	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_", "-", "_"))
-	v.AutomaticEnv()
-
-	// --- 4. Set default values ---
-	v.SetDefault("project_id", "")
-	v.SetDefault("region", "us-central1") // Default top-level region
-	v.SetDefault("services_definition_path", "services.yaml")
-	v.SetDefault("default_docker_registry", "")
-	v.SetDefault("director_service_url", "")
-
-	// Cloud Run Defaults
-	v.SetDefault("cloud_run_defaults.cpu", "1000m") // 1 vCPU
-	v.SetDefault("cloud_run_defaults.memory", "512Mi")
-	v.SetDefault("cloud_run_defaults.concurrency", 80)
-	v.SetDefault("cloud_run_defaults.min_instances", 0)
-	v.SetDefault("cloud_run_defaults.max_instances", 10)
-	v.SetDefault("cloud_run_defaults.timeout_seconds", 300)
-	v.SetDefault("cloud_run_defaults.service_account", "") // Default is Cloud Run default SA
-
-	// Cloud Run Default Probes
-	v.SetDefault("cloud_run_defaults.startup_probe.path", "/health/startup")
-	v.SetDefault("cloud_run_defaults.startup_probe.port", 8080)
-	v.SetDefault("cloud_run_defaults.startup_probe.initial_delay_seconds", 1) // Changed from "1s" to 1
-	v.SetDefault("cloud_run_defaults.startup_probe.period_seconds", 5)        // Changed from "5s" to 5
-	v.SetDefault("cloud_run_defaults.startup_probe.timeout_seconds", 2)       // Changed from "2s" to 2
-	v.SetDefault("cloud_run_defaults.startup_probe.failure_threshold", 5)
-
-	v.SetDefault("cloud_run_defaults.liveness_probe.path", "/health/liveness")
-	v.SetDefault("cloud_run_defaults.liveness_probe.port", 8080)
-	v.SetDefault("cloud_run_defaults.liveness_probe.initial_delay_seconds", 0) // Changed from "0s" to 0
-	v.SetDefault("cloud_run_defaults.liveness_probe.period_seconds", 30)       // Changed from "30s" to 30
-	v.SetDefault("cloud_run_defaults.liveness_probe.timeout_seconds", 5)       // Changed from "5s" to 5
-	v.SetDefault("cloud_run_defaults.liveness_probe.failure_threshold", 1)
-
-	// No defaults for `cloud_run_services` map; it's explicitly defined by users.
-
-	// --- 5. Unmarshal config into our struct ---
-	var cfg DeployerConfig
-	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal deployer configuration: %w", err)
+	if cfg.ProjectID == "" {
+		cfg.ProjectID = projectID
+	}
+	// --- 4. Dynamic adjustment for DefaultDockerRegistry ---
+	if cfg.DefaultDockerRegistry == "" {
+		cfg.DefaultDockerRegistry = fmt.Sprintf("gcr.io/%s", cfg.ProjectID)
+		logger.Info().Str("project-id", cfg.ProjectID).Str("default_docker_registry", cfg.DefaultDockerRegistry).Msg("Default Docker Registry dynamically set based on Project ID.")
 	}
 
-	return &cfg, nil
+	return cfg, nil
+}
+
+// Duration is a custom type that wraps time.Duration to implement yaml.Unmarshaler.
+type Duration time.Duration
+
+// UnmarshalYAML implements the yaml.Unmarshaler interface, allowing "15s" to be parsed directly to a duration.
+func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
+	var s string
+	if err := value.Decode(&s); err != nil {
+		return err
+	}
+	parsed, err := time.ParseDuration(s)
+	if err != nil {
+		return err
+	}
+	*d = Duration(parsed)
+	return nil
 }

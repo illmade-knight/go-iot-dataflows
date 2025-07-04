@@ -43,12 +43,12 @@ func (c *Client) Close() error {
 
 // DeployService deploys or updates a Cloud Run service based on the provided configuration.
 // It creates the service if it doesn't exist, or updates it if it does.
-// It now accepts config.CloudRunDefaults and the image tag directly.
+// It now accepts config.CloudRunSetup and the image tag directly.
 func (c *Client) DeployService(
 	ctx context.Context,
 	serviceName string,
 	imageTag string, // Add imageTag here
-	cloudRunCfg config.CloudRunDefaults, // Accept custom CloudRunDefaults struct
+	cloudRunCfg config.CloudRunSetup, // Accept custom CloudRunSetup struct
 ) (*runpb.Service, error) {
 	parent := fmt.Sprintf("projects/%s/locations/%s", c.config.ProjectID, c.config.Region)
 	servicePath := fmt.Sprintf("%s/services/%s", parent, serviceName)
@@ -56,7 +56,7 @@ func (c *Client) DeployService(
 	// Construct the runpb.RevisionTemplate from cloudRunCfg and imageTag
 	revisionTemplate := &runpb.RevisionTemplate{
 		// Revision:       // Optional, omitted as per user's template
-		Labels:         cloudRunCfg.EnvVars, // Map EnvVars to Labels if that's the intent or add a separate Labels field in config.CloudRunDefaults
+		Labels:         cloudRunCfg.EnvVars, // Map EnvVars to Labels if that's the intent or add a separate Labels field in config.CloudRunSetup
 		ServiceAccount: cloudRunCfg.ServiceAccount,
 		Containers: []*runpb.Container{
 			{

@@ -1,0 +1,39 @@
+# deployer/deployment.yaml
+# project_id: # enter valid project_id or leave empty if you pass in to main
+region: us-central1
+service_source_path: dataflow/devflow/
+service_director_service_name: servicedirector
+
+# default_docker_registry:  # if empty this will be created from project_id
+
+cloud_run_defaults:
+  cpu: 1000m # 1 vCPU
+  memory: 512Mi
+  concurrency: 80
+  timeout_seconds: 300
+  max_instances: 10
+  min_instances: 0
+  invoker_all: false # Default to private (requires IAM for access)
+  env_vars:
+    GLOBAL_APP_NAME: "orchestrator-test"
+    ENVIRONMENT: "dev"
+
+services:
+  servicedirector:
+    dockerfile_path: servicedirector/Dockerfile # Path relative to services_source_base_path
+    cloud_run_spec:
+      ## leave empty and an appropriate one will be created
+      ##service_account: servicedirector-sa # Service account name (orchestrator will ensure its existence)
+      invoker_all: true # Make Service Director publicly accessible for other services to call
+      env_vars:
+        DIRECTOR_LOG_LEVEL: "info"
+  ingestor:
+    dockerfile_path: ingestor/Dockerfile # Path relative to services_source_base_path
+    cloud_run_spec:
+      ## leave empty and an appropriate one will be created
+      ## service_account: ingestor-sa # Service account name (orchestrator will ensure its existence)
+      cpu: 500m # Override default CPU for this service
+      memory: 256Mi # Override default memory for this service
+      env_vars:
+        ## will be added after servicedirector deployment
+        ##SERVICE_DIRECTOR_URL: "input-topic"

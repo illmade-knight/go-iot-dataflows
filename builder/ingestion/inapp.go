@@ -23,7 +23,7 @@ type IngestionServiceWrapper struct {
 }
 
 // NewIngestionServiceWrapper creates and configures a new IngestionServiceWrapper.
-// It now performs a resource verification check against the ServiceDirector on startup.
+// It now performs a resource verification check against the Director on startup.
 // NewIngestionServiceWrapper creates and configures a new IngestionServiceWrapper.
 // It is now updated to accept an AttributeExtractor to enable attribute injection.
 func NewIngestionServiceWrapper(
@@ -36,14 +36,14 @@ func NewIngestionServiceWrapper(
 	ctx := context.Background()
 	ingestionLogger := logger.With().Str("component", "IngestionService").Logger()
 
-	// --- Verify resources with ServiceDirector ---
+	// --- Verify resources with Director ---
 	if cfg.ServiceDirectorURL != "" {
 		directorClient, err := servicedirector.NewClient(cfg.ServiceDirectorURL, ingestionLogger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create service director client: %w", err)
 		}
 		if err := directorClient.VerifyDataflow(ctx, dataflowName, serviceName); err != nil {
-			return nil, fmt.Errorf("resource verification failed via ServiceDirector: %w", err)
+			return nil, fmt.Errorf("resource verification failed via Director: %w", err)
 		}
 	} else {
 		ingestionLogger.Warn().Msg("ServiceDirectorURL not set, skipping resource verification. This is not recommended for production.")

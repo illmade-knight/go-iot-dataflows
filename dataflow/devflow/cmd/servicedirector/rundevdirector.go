@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"github.com/illmade-knight/go-cloud-manager/pkg/servicemanager"
 	"os"
 	"os/signal"
 	"syscall"
@@ -15,7 +16,7 @@ func main() {
 	// Use a console writer for pretty, human-readable logs.
 	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 
-	// Load the ServiceDirector's own configuration. This will read flags like
+	// Load the Director's own configuration. This will read flags like
 	// --services-def-path to find the services.yaml file.
 	cfg, err := servicedirector.LoadConfig()
 	if err != nil {
@@ -42,28 +43,32 @@ func main() {
 	}
 
 	// Create a loader that reads definitions from the specified YAML file.
-	loader := servicedirector.NewYAMLServicesDefinitionLoader(cfg.ServicesDefPath)
+	loader, err := servicemanager.NewYAMLArchitectureIO(cfg.ServicesDefPath, "")
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to load service director architecture")
+	}
+	log.Info().Str("yaml", cfg.ServicesDefPath).Msg("Loading services.yaml")
 
-	// Create the ServiceDirector instance.
+	// Create the Director instance.
 	schemaRegistry := map[string]interface{}{}
 	director, err := servicedirector.NewServiceDirector(context.Background(), cfg, loader, schemaRegistry, log.Logger)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to create ServiceDirector")
+		log.Fatal().Err(err).Msg("Failed to create Director")
 	}
 
 	// Start the service. This is non-blocking.
 	if err := director.Start(); err != nil {
-		log.Fatal().Err(err).Msg("Failed to start ServiceDirector")
+		log.Fatal().Err(err).Msg("Failed to start Director")
 	}
-	log.Info().Str("port", director.GetHTTPPort()).Msg("ServiceDirector is running")
+	log.Info().Str("port", director.GetHTTPPort()).Msg("Director is running")
 
 	// Wait for a shutdown signal.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
-	log.Info().Msg("Shutdown signal received, stopping ServiceDirector...")
+	log.Info().Msg("Shutdown signal received, stopping Director...")
 
 	// Gracefully shut down the service.
 	director.Shutdown()
-	log.Info().Msg("ServiceDirector stopped.")
+	log.Info().Msg("Director stopped.")
 }

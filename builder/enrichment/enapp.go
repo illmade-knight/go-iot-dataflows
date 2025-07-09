@@ -43,14 +43,14 @@ func NewPublishMessageEnrichmentServiceWrapper(
 	// Create a new context that we can serviceCancel from our Shutdown method
 	serviceCtx, serviceCancel := context.WithCancel(parentContext)
 
-	// --- Verify resources with ServiceDirector ---
+	// --- Verify resources with Director ---
 	if cfg.ServiceDirectorURL != "" {
 		directorClient, err := servicedirector.NewClient(cfg.ServiceDirectorURL, enrichmentLogger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create service director client: %w", err)
 		}
 		if err := directorClient.VerifyDataflow(serviceCtx, cfg.DataflowName, cfg.ServiceName); err != nil {
-			return nil, fmt.Errorf("resource verification failed via ServiceDirector: %w", err)
+			return nil, fmt.Errorf("resource verification failed via Director: %w", err)
 		}
 		enrichmentLogger.Info().Msg("Resource verification successful.")
 	} else {
@@ -112,8 +112,6 @@ func NewPublishMessageEnrichmentServiceWrapper(
 		cfg.ProducerConfig,
 		enrichmentLogger,
 	)
-
-	//simpleProducer, err := messagepipeline.NewGoogleSimplePublisher(psClient, cfg.ProducerConfig.TopicID, enrichmentLogger)
 
 	enricher := enrichment.NewMessageEnricher(metadataFetcher, nil, logger)
 

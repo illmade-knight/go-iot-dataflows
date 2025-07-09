@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"net/http"
@@ -14,10 +13,10 @@ import (
 
 	"cloud.google.com/go/pubsub"
 	"github.com/google/uuid"
+	"github.com/illmade-knight/go-cloud-manager/pkg/servicemanager"
 	"github.com/illmade-knight/go-iot-dataflows/builder"
 	"github.com/illmade-knight/go-iot/helpers/emulators"
 	"github.com/illmade-knight/go-iot/helpers/loadgen"
-	"github.com/illmade-knight/go-iot/pkg/servicemanager"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 )
@@ -40,13 +39,7 @@ func TestDevflowE2E(t *testing.T) {
 	}
 	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") == "" {
 		log.Warn().Msg("GOOGLE_APPLICATION_CREDENTIALS not set, relying on Application Default Credentials (ADC).")
-		adcCheckCtx, adcCheckCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer adcCheckCancel()
-		realPubSubClient, errAdc := pubsub.NewClient(adcCheckCtx, projectID)
-		if errAdc != nil {
-			t.Skipf("Skipping cloud test: ADC check failed: %v", errAdc)
-		}
-		realPubSubClient.Close()
+		checkGCPAuth(t)
 	}
 
 	// --- Timing & Metrics Setup ---
@@ -58,7 +51,6 @@ func TestDevflowE2E(t *testing.T) {
 
 	t.Cleanup(func() {
 		timings["TotalTestDuration"] = time.Since(testStart).String()
-		// Add the final message counts to the report.
 		timings["MessagesExpected"] = strconv.Itoa(expectedMessageCount)
 		timings["MessagesPublished(Actual)"] = strconv.Itoa(publishedCount)
 		timings["MessagesVerified(Actual)"] = strconv.Itoa(verifiedCount)
@@ -79,30 +71,27 @@ func TestDevflowE2E(t *testing.T) {
 	uniqueSubscriptionID := fmt.Sprintf("dev-verifier-sub-%s", runID)
 	logger.Info().Str("run_id", runID).Str("topic_id", uniqueTopicID).Msg("Generated unique resources for test run")
 
-	// 2. Build the services definition in memory.
-	servicesConfig := &servicemanager.TopLevelConfig{
-		DefaultProjectID: projectID,
-		Environments: map[string]servicemanager.EnvironmentSpec{
-			"dev": {ProjectID: projectID},
+	// 2. Build the services definition in memory using the new architecture struct.
+	servicesConfig := &servicemanager.MicroserviceArchitecture{
+		Environment: servicemanager.Environment{
+			Name:      "e2e-devflow",
+			ProjectID: projectID,
 		},
-		Dataflows: []servicemanager.ResourceGroup{
-			{
+		Dataflows: map[string]servicemanager.ResourceGroup{
+			dataflowName: {
 				Name:      dataflowName,
 				Lifecycle: &servicemanager.LifecyclePolicy{Strategy: servicemanager.LifecycleStrategyEphemeral},
-				Resources: servicemanager.ResourcesSpec{
+				Resources: servicemanager.CloudResourcesSpec{
 					Topics: []servicemanager.TopicConfig{
-						{Name: uniqueTopicID},
+						{CloudResource: servicemanager.CloudResource{Name: uniqueTopicID}},
 					},
 					Subscriptions: []servicemanager.SubscriptionConfig{
-						{Name: uniqueSubscriptionID, Topic: uniqueTopicID},
+						{CloudResource: servicemanager.CloudResource{Name: uniqueSubscriptionID}, Topic: uniqueTopicID},
 					},
 				},
 			},
 		},
 	}
-
-	servicesDef, err := servicemanager.NewInMemoryServicesDefinition(servicesConfig)
-	require.NoError(t, err)
 
 	// 3. Start MQTT Broker and ServiceDirector
 	start := time.Now()
@@ -111,7 +100,8 @@ func TestDevflowE2E(t *testing.T) {
 
 	start = time.Now()
 	directorLogger := logger.With().Str("service", "servicedirector").Logger()
-	directorService, directorURL := startServiceDirector(t, totalTestContext, directorLogger, servicesDef)
+	// The schema registry is passed to the director but is empty for this test.
+	directorService, directorURL := startServiceDirector(t, totalTestContext, directorLogger, servicesConfig, nil)
 	t.Cleanup(directorService.Shutdown)
 	timings["ServiceStartup(Director)"] = time.Since(start).String()
 	logger.Info().Str("url", directorURL).Msg("ServiceDirector is healthy")
@@ -119,7 +109,7 @@ func TestDevflowE2E(t *testing.T) {
 	// 4. Set up resources via the director's API
 	start = time.Now()
 	setupURL := directorURL + "/orchestrate/setup"
-	resp, err := http.Post(setupURL, "application/json", bytes.NewBuffer([]byte{}))
+	resp, err := http.Post(setupURL, "application/json", nil)
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode, "ServiceDirector setup request failed")
 	resp.Body.Close()
@@ -172,17 +162,14 @@ func TestDevflowE2E(t *testing.T) {
 
 	go func() {
 		defer close(verificationDone)
-
-		// We can pass nil to verifyPubSubMessages as at the moment we don't need validation of the messages
 		var noValidationNeeded MessageValidationFunc = nil
-
 		verifiedCount = verifyPubSubMessages(
 			t,
 			logger,
 			totalTestContext,
 			sub,
 			expectedCountCh,
-			noValidationNeeded, // The call is now self-documenting.
+			noValidationNeeded,
 		)
 	}()
 

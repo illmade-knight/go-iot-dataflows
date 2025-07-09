@@ -12,14 +12,13 @@ import (
 	"testing"
 	"time"
 
-	"cloud.google.com/go/pubsub"
 	"cloud.google.com/go/storage"
 	"github.com/google/uuid"
+	"github.com/illmade-knight/go-cloud-manager/pkg/servicemanager"
 	"github.com/illmade-knight/go-iot-dataflows/builder"
 	"github.com/illmade-knight/go-iot/helpers/emulators"
 	"github.com/illmade-knight/go-iot/helpers/loadgen"
-	"github.com/illmade-knight/go-iot/pkg/servicemanager"
-	"github.com/rs/zerolog/log"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
@@ -32,18 +31,16 @@ const (
 )
 
 func TestIceStoreDataflowE2E(t *testing.T) {
+	// --- Logger and Prerequisite Checks ---
+	logger := zerolog.New(os.Stderr).With().Timestamp().Str("test", "TestIceStoreDataflowE2E").Logger()
+
 	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
 	if projectID == "" {
 		t.Skip("Skipping E2E test: GOOGLE_CLOUD_PROJECT env var must be set.")
 	}
 	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") == "" {
-		log.Warn().Msg("GOOGLE_APPLICATION_CREDENTIALS not set, relying on Application Default Credentials (ADC).")
-		adcCheckCtx, adcCheckCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer adcCheckCancel()
-		_, errAdc := pubsub.NewClient(adcCheckCtx, projectID)
-		if errAdc != nil {
-			t.Skipf("Skipping cloud test: ADC check failed: %v", errAdc)
-		}
+		logger.Warn().Msg("GOOGLE_APPLICATION_CREDENTIALS not set, relying on Application Default Credentials (ADC).")
+		checkGCPAuth(t)
 	}
 
 	// --- Timing & Metrics Setup ---
@@ -59,42 +56,43 @@ func TestIceStoreDataflowE2E(t *testing.T) {
 		timings["MessagesPublished(Actual)"] = strconv.Itoa(publishedCount)
 		timings["MessagesVerified(Actual)"] = strconv.Itoa(verifiedCount)
 
-		t.Log("\n--- Test Timing & Metrics Breakdown ---")
+		logger.Info().Msg("\n--- Test Timing & Metrics Breakdown ---")
 		for name, d := range timings {
-			t.Logf("%-35s: %s", name, d)
+			logger.Info().Msgf("%-35s: %s", name, d)
 		}
-		t.Log("------------------------------------")
+		logger.Info().Msg("------------------------------------")
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-
-	logger := log.With().Str("test", "TestIceStoreDataflowE2E").Logger()
 
 	// 1. Define unique resources for this test run.
 	runID := uuid.New().String()[:8]
 	dataflowName := fmt.Sprintf("icestore-flow-%s", runID)
 	uniqueTopicID := fmt.Sprintf("icestore-ingestion-topic-%s", runID)
 	uniqueIcestoreSubID := fmt.Sprintf("icestore-sub-%s", runID)
-	uniqueBucketName := fmt.Sprintf("icestore-bucket-%s", runID)
+	uniqueBucketName := fmt.Sprintf("sm-icestore-bucket-%s", runID) // Prefixed for clarity
 	logger.Info().Str("run_id", runID).Msg("Generated unique resources for test run")
 
-	// 2. Build the services definition in memory.
-	servicesConfig := &servicemanager.TopLevelConfig{
-		DefaultProjectID: projectID,
-		Environments:     map[string]servicemanager.EnvironmentSpec{"dev": {ProjectID: projectID}},
-		Dataflows: []servicemanager.ResourceGroup{{
-			Name:      dataflowName,
-			Lifecycle: &servicemanager.LifecyclePolicy{Strategy: servicemanager.LifecycleStrategyEphemeral},
-			Resources: servicemanager.ResourcesSpec{
-				Topics:        []servicemanager.TopicConfig{{Name: uniqueTopicID}},
-				Subscriptions: []servicemanager.SubscriptionConfig{{Name: uniqueIcestoreSubID, Topic: uniqueTopicID}},
-				GCSBuckets:    []servicemanager.GCSBucket{{Name: uniqueBucketName}},
+	// 2. Build the services definition in memory using the new architecture struct.
+	servicesConfig := &servicemanager.MicroserviceArchitecture{
+		Environment: servicemanager.Environment{
+			Name:      "e2e-icestore",
+			ProjectID: projectID,
+			Location:  "US",
+		},
+		Dataflows: map[string]servicemanager.ResourceGroup{
+			dataflowName: {
+				Name:      dataflowName,
+				Lifecycle: &servicemanager.LifecyclePolicy{Strategy: servicemanager.LifecycleStrategyEphemeral},
+				Resources: servicemanager.CloudResourcesSpec{
+					Topics:        []servicemanager.TopicConfig{{CloudResource: servicemanager.CloudResource{Name: uniqueTopicID}}},
+					Subscriptions: []servicemanager.SubscriptionConfig{{CloudResource: servicemanager.CloudResource{Name: uniqueIcestoreSubID}, Topic: uniqueTopicID}},
+					GCSBuckets:    []servicemanager.GCSBucket{{CloudResource: servicemanager.CloudResource{Name: uniqueBucketName}, Location: "US"}},
+				},
 			},
-		}},
+		},
 	}
-	servicesDef, err := servicemanager.NewInMemoryServicesDefinition(servicesConfig)
-	require.NoError(t, err)
 
 	// 3. Setup dependencies.
 	var opts []option.ClientOption
@@ -111,7 +109,7 @@ func TestIceStoreDataflowE2E(t *testing.T) {
 
 	// 4. Start ServiceDirector and orchestrate resources.
 	start = time.Now()
-	directorService, directorURL := startServiceDirector(t, ctx, logger.With().Str("service", "servicedirector").Logger(), servicesDef)
+	directorService, directorURL := startServiceDirector(t, ctx, logger.With().Str("service", "servicedirector").Logger(), servicesConfig, nil)
 	t.Cleanup(directorService.Shutdown)
 	timings["ServiceStartup(Director)"] = time.Since(start).String()
 
@@ -185,7 +183,6 @@ func TestIceStoreDataflowE2E(t *testing.T) {
 
 	// 7. Verify results.
 	verificationStart := time.Now()
-	// Use a new client for verification to ensure it has the correct context.
 	gcsClientForVerification, err := storage.NewClient(ctx, opts...)
 	require.NoError(t, err)
 	defer gcsClientForVerification.Close()

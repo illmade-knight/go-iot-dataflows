@@ -14,12 +14,11 @@ import (
 
 	bq "cloud.google.com/go/bigquery"
 	"cloud.google.com/go/firestore"
-	"cloud.google.com/go/pubsub"
 	"github.com/google/uuid"
+	"github.com/illmade-knight/go-cloud-manager/pkg/servicemanager"
 	"github.com/illmade-knight/go-iot/helpers/emulators"
 	"github.com/illmade-knight/go-iot/helpers/loadgen"
-	"github.com/illmade-knight/go-iot/pkg/servicemanager"
-	"github.com/rs/zerolog/log"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
@@ -32,21 +31,17 @@ const (
 )
 
 func TestEnrichmentToBigQueryE2E(t *testing.T) {
+	logger := zerolog.New(os.Stderr).
+		With().Timestamp().Str("test", "TestEnrichmentToBigQueryE2E").Logger()
+
 	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
 	if projectID == "" {
 		t.Skip("Skipping E2E test: GOOGLE_CLOUD_PROJECT env var must be set.")
 	}
 	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") == "" {
-		log.Warn().Msg("GOOGLE_APPLICATION_CREDENTIALS not set, relying on Application Default Credentials (ADC).")
-		adcCheckCtx, adcCheckCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer adcCheckCancel()
-		realPubSubClient, errAdc := pubsub.NewClient(adcCheckCtx, projectID)
-		if errAdc != nil {
-			t.Skipf("Skipping cloud test: ADC check failed: %v. Please configure ADC or set GOOGLE_APPLICATION_CREDENTIALS.", errAdc)
-		}
-		realPubSubClient.Close()
+		logger.Warn().Msg("GOOGLE_APPLICATION_CREDENTIALS not set, relying on Application Default Credentials (ADC).")
+		checkGCPAuth(t)
 	}
-
 	// --- Timing & Metrics Setup ---
 	timings := make(map[string]string)
 	testStart := time.Now()
@@ -57,7 +52,6 @@ func TestEnrichmentToBigQueryE2E(t *testing.T) {
 		timings["TotalTestDuration"] = time.Since(testStart).String()
 		timings["MessagesExpected"] = strconv.Itoa(expectedMessageCount)
 		timings["MessagesPublished(Actual)"] = strconv.Itoa(publishedCount)
-		// For BQ, the verified count is always the published count if the test passes.
 		timings["MessagesVerified(Actual)"] = strconv.Itoa(publishedCount)
 
 		t.Log("\n--- Test Timing & Metrics Breakdown ---")
@@ -70,61 +64,49 @@ func TestEnrichmentToBigQueryE2E(t *testing.T) {
 	totalTestContext, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	logger := log.With().Str("test", "TestEnrichmentToBigQueryE2E").Logger()
-
 	// 1. Define unique resources for this test run.
 	runID := uuid.New().String()[:8]
 	dataflowName := fmt.Sprintf("enrichment-bq-flow-%s", runID)
 	ingestionTopicID := fmt.Sprintf("enrich-bq-ingest-topic-%s", runID)
 	enrichmentSubID := fmt.Sprintf("enrich-bq-sub-%s", runID)
-
-	enrichedTopicID := fmt.Sprintf("enrich-bq-output-topic-%s", runID) // This topic will feed BigQuery
+	enrichedTopicID := fmt.Sprintf("enrich-bq-output-topic-%s", runID)
 	bigquerySubID := fmt.Sprintf("bq-sub-%s", runID)
 	firestoreCollection := fmt.Sprintf("devices-e2e-%s", runID)
-
 	uniqueDatasetID := fmt.Sprintf("dev_enriched_dataset_%s", runID)
 	uniqueTableID := fmt.Sprintf("dev_enriched_payloads_%s", runID)
 
-	// 2. Build the services definition in memory.
-	// The schemaIdentifier for the BigQuery table will be for the EnrichedTestPayload.
+	// 2. Build the services definition in memory using the new MicroserviceArchitecture struct.
 	schemaIdentifier := "github.com/illmade-knight/go-iot-dataflows/dataflow/devflow/e2e.EnrichedTestPayload"
 
-	servicesConfig := &servicemanager.TopLevelConfig{
-		DefaultProjectID: projectID,
-		Environments: map[string]servicemanager.EnvironmentSpec{
-			"dev": {ProjectID: projectID},
+	servicesConfig := &servicemanager.MicroserviceArchitecture{
+		Environment: servicemanager.Environment{
+			Name:      "e2e-enrichment",
+			ProjectID: projectID,
+			Location:  "US",
 		},
-		Dataflows: []servicemanager.ResourceGroup{{
-			Name:      dataflowName,
-			Lifecycle: &servicemanager.LifecyclePolicy{Strategy: servicemanager.LifecycleStrategyEphemeral},
-			Resources: servicemanager.ResourcesSpec{
-				Topics: []servicemanager.TopicConfig{{Name: ingestionTopicID}, {Name: enrichedTopicID}},
-				Subscriptions: []servicemanager.SubscriptionConfig{
-					{
-						Name:            enrichmentSubID,
-						Topic:           ingestionTopicID,
-						ConsumerService: "",
+		Dataflows: map[string]servicemanager.ResourceGroup{
+			dataflowName: {
+				Name:      dataflowName,
+				Lifecycle: &servicemanager.LifecyclePolicy{Strategy: servicemanager.LifecycleStrategyEphemeral},
+				Resources: servicemanager.CloudResourcesSpec{
+					Topics: []servicemanager.TopicConfig{{CloudResource: servicemanager.CloudResource{Name: ingestionTopicID}}, {CloudResource: servicemanager.CloudResource{Name: enrichedTopicID}}},
+					Subscriptions: []servicemanager.SubscriptionConfig{
+						{CloudResource: servicemanager.CloudResource{Name: enrichmentSubID}, Topic: ingestionTopicID},
+						{CloudResource: servicemanager.CloudResource{Name: bigquerySubID}, Topic: enrichedTopicID},
 					},
-					{
-						Name:            bigquerySubID,
-						Topic:           enrichedTopicID,
-						ConsumerService: "",
-					},
-				},
-				BigQueryDatasets: []servicemanager.BigQueryDataset{{Name: uniqueDatasetID}},
-				BigQueryTables: []servicemanager.BigQueryTable{
-					{
-						Name:                   uniqueTableID,
-						Dataset:                uniqueDatasetID,
-						SchemaSourceType:       "go_struct",
-						SchemaSourceIdentifier: schemaIdentifier,
+					BigQueryDatasets: []servicemanager.BigQueryDataset{{CloudResource: servicemanager.CloudResource{Name: uniqueDatasetID}}},
+					BigQueryTables: []servicemanager.BigQueryTable{
+						{
+							CloudResource:          servicemanager.CloudResource{Name: uniqueTableID},
+							Dataset:                uniqueDatasetID,
+							SchemaSourceIdentifier: schemaIdentifier,
+							ClusteringFields:       []string{"device_id"}, // makes the table clustered if present
+						},
 					},
 				},
 			},
-		}},
+		},
 	}
-	servicesDef, err := servicemanager.NewInMemoryServicesDefinition(servicesConfig)
-	require.NoError(t, err)
 
 	// Define the schema registry for the director to understand the BigQuery schema
 	schemaRegistry := map[string]interface{}{
@@ -163,7 +145,8 @@ func TestEnrichmentToBigQueryE2E(t *testing.T) {
 
 	// 5. Start services and orchestrate resources.
 	start = time.Now()
-	directorService, directorURL := startServiceDirector(t, totalTestContext, logger, servicesDef, schemaRegistry)
+	// Call the standard, refactored startServiceDirector helper.
+	directorService, directorURL := startServiceDirector(t, totalTestContext, logger, servicesConfig, schemaRegistry)
 	t.Cleanup(directorService.Shutdown)
 	timings["ServiceStartup(Director)"] = time.Since(start).String()
 

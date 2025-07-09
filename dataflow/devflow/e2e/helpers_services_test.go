@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/illmade-knight/go-cloud-manager/pkg/servicemanager"
+
 	"github.com/illmade-knight/go-iot-dataflows/builder"
 	"github.com/illmade-knight/go-iot-dataflows/builder/bigquery"
 	"github.com/illmade-knight/go-iot-dataflows/builder/enrichment"
@@ -22,7 +24,6 @@ import (
 	"github.com/illmade-knight/go-iot/helpers/loadgen"
 	"github.com/illmade-knight/go-iot/pkg/device"
 	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
-	"github.com/illmade-knight/go-iot/pkg/servicemanager"
 	"github.com/illmade-knight/go-iot/pkg/types"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
@@ -66,42 +67,35 @@ func setupEnrichmentTestData(
 	return devices, deviceToClientID, cleanupFunc
 }
 
-// startServiceDirector now accepts a schemaRegistry to pass to the director.
-func startServiceDirector(t *testing.T, ctx context.Context, logger zerolog.Logger, servicesDef servicemanager.ServicesDefinition, schemaRegistry ...map[string]interface{}) (builder.Service, string) {
+// startServiceDirector correctly initializes and starts the refactored ServiceDirector for testing.
+func startServiceDirector(t *testing.T, ctx context.Context, logger zerolog.Logger, arch *servicemanager.MicroserviceArchitecture, schemaRegistry map[string]interface{}) (builder.Service, string) {
 	t.Helper()
-	loader := &InMemoryServicesDefinitionLoader{Def: servicesDef}
-	cfg := &servicedirector.Config{
-		BaseConfig:  builder.BaseConfig{HTTPPort: ":0"},
-		Environment: "dev",
+
+	//we'd actually prefer if we didn't need an empty registry if no Bigquery manager is required
+	if schemaRegistry == nil {
+		log.Warn().Msg("schema registry is nil, initializing empty registry")
+		schemaRegistry = make(map[string]interface{})
 	}
-	var reg map[string]interface{}
-	if len(schemaRegistry) > 0 {
-		reg = schemaRegistry[0]
+
+	// Use a mock loader that provides our in-memory architecture.
+	loader := &inMemoryLoader{arch: arch}
+
+	// Configure the director to run on a random available port.
+	directorCfg := &servicedirector.Config{
+		BaseConfig: builder.BaseConfig{
+			HTTPPort: ":0", // Let the OS choose the port
+		},
 	}
-	director, err := servicedirector.NewServiceDirector(ctx, cfg, loader, reg, logger)
+
+	director, err := servicedirector.NewServiceDirector(ctx, directorCfg, loader, schemaRegistry, logger)
 	require.NoError(t, err)
 
-	go func() {
-		if err := director.Start(); err != nil && err != http.ErrServerClosed {
-			logger.Error().Err(err).Msg("ServiceDirector failed during test")
-		}
-	}()
+	err = director.Start()
+	require.NoError(t, err)
 
-	var directorURL string
-	require.Eventually(t, func() bool {
-		port := director.GetHTTPPort()
-		if port == "" || port == ":0" {
-			return false
-		}
-		directorURL = fmt.Sprintf("http://localhost%s", port)
-		resp, err := http.Get(directorURL + "/healthz")
-		if err != nil {
-			return false
-		}
-		defer resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 10*time.Second, 200*time.Millisecond, "ServiceDirector health check did not become OK")
-	return director, directorURL
+	// Construct the base URL for the test client.
+	baseURL := "http://127.0.0.1" + director.GetHTTPPort()
+	return director, baseURL
 }
 
 // startIngestionService starts a simple ingestion service that acts as a pure bridge.

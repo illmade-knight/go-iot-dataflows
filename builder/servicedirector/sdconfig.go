@@ -11,12 +11,12 @@ import (
 	"github.com/spf13/viper"
 )
 
-// Config holds all configuration for the ServiceDirector itself.
+// Config holds all configuration for the Director itself.
 type Config struct {
 	builder.BaseConfig `mapstructure:",squash"` // Embed BaseConfig for common fields
 
 	// ServicesDefSourceType indicates where the service definitions are loaded from (e.g., "yaml", "firestore").
-	// This makes the ServiceDirector itself adaptable to different configuration backends.
+	// This makes the Director itself adaptable to different configuration backends.
 	ServicesDefSourceType string `mapstructure:"services_def_source_type"`
 	// ServicesDefPath is used if ServicesDefSourceType is "yaml".
 	ServicesDefPath string `mapstructure:"services_def_path"`
@@ -31,14 +31,14 @@ type Config struct {
 	} `mapstructure:"firestore"`
 }
 
-// LoadConfig initializes and loads the application configuration for the ServiceDirector.
+// LoadConfig initializes and loads the application configuration for the Director.
 // It follows a hierarchy of configuration sources: defaults -> config file -> environment variables -> command-line flags.
 func LoadConfig() (*Config, error) {
 	v := viper.New()
 
 	// --- 1. Set Defaults ---
 	v.SetDefault("log_level", "info")
-	v.SetDefault("http_port", ":8080") // Default HTTP port for ServiceDirector
+	v.SetDefault("http_port", ":8080") // Default HTTP port for Director
 	v.SetDefault("project_id", "default-gcp-project")
 	v.SetDefault("credentials_file", "") // Default to ADC for general GCP operations
 
@@ -49,11 +49,11 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("firestore.collection_path", "service-definitions") // Default Firestore collection path
 
 	// --- 2. Set up pflag for command-line overrides ---
-	pflag.String("config", "", "ServiceSourcePath to ServiceDirector config file (e.g., director-config.yaml)")
+	pflag.String("config", "", "ServiceSourcePath to Director config file (e.g., director-config.yaml)")
 	pflag.String("log-level", "", "Log level (debug, info, warn, error)")
-	pflag.String("http-port", "", "HTTP health check port for ServiceDirector")
-	pflag.String("project-id", "", "GCP Project ID for ServiceDirector's own operations")
-	pflag.String("credentials-file", "", "ServiceSourcePath to GCP credentials JSON file for ServiceDirector's own GCP clients")
+	pflag.String("http-port", "", "HTTP health check port for Director")
+	pflag.String("project-id", "", "GCP Project ID for Director's own operations")
+	pflag.String("credentials-file", "", "ServiceSourcePath to GCP credentials JSON file for Director's own GCP clients")
 	pflag.String("services-def-source-type", "", "Source type for service definitions (yaml or firestore)")
 	pflag.String("services-def-path", "", "ServiceSourcePath to services definition YAML file")
 	pflag.String("environment", "", "Operational environment (e.g., dev, prod)")
@@ -69,7 +69,7 @@ func LoadConfig() (*Config, error) {
 		v.SetConfigType("yaml")
 		if err := v.ReadInConfig(); err != nil {
 			if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-				log.Warn().Err(err).Str("config_file", configFile).Msg("Failed to read ServiceDirector config file, using defaults/flags/environment variables.")
+				log.Warn().Err(err).Str("config_file", configFile).Msg("Failed to read Director config file, using defaults/flags/environment variables.")
 			}
 		}
 	}
@@ -82,13 +82,13 @@ func LoadConfig() (*Config, error) {
 	// --- 5. Unmarshal config into our struct ---
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal ServiceDirector configuration: %w", err)
+		return nil, fmt.Errorf("failed to unmarshal Director configuration: %w", err)
 	}
 
 	// --- 6. Explicitly check for Cloud Run PORT environment variable ---
 	// The `PORT` environment variable is automatically set by Cloud Run and takes precedence.
 	if port := os.Getenv("PORT"); port != "" {
-		log.Info().Str("old_http_port", cfg.HTTPPort).Str("new_http_port", ":"+port).Msg("Overriding ServiceDirector HTTP port with Cloud Run PORT environment variable.")
+		log.Info().Str("old_http_port", cfg.HTTPPort).Str("new_http_port", ":"+port).Msg("Overriding Director HTTP port with Cloud Run PORT environment variable.")
 		cfg.HTTPPort = ":" + port
 	}
 

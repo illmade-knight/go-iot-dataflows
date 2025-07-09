@@ -10,8 +10,10 @@ import (
 
 	"github.com/illmade-knight/go-iot-dataflows/builder"
 	"github.com/illmade-knight/go-iot-dataflows/builder/servicedirector"
+
 	"github.com/illmade-knight/go-iot/pkg/bqstore"
 	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
+
 	"github.com/rs/zerolog"
 	"google.golang.org/api/option"
 )
@@ -36,14 +38,14 @@ func NewBQServiceWrapper[T any](
 	ctx := context.Background()
 	bqLogger := logger.With().Str("component", "BQService").Logger()
 
-	// --- Verify resources with ServiceDirector ---
+	// --- Verify resources with Director ---
 	if cfg.ServiceDirectorURL != "" {
 		directorClient, err := servicedirector.NewClient(cfg.ServiceDirectorURL, bqLogger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create service director client: %w", err)
 		}
 		if err := directorClient.VerifyDataflow(ctx, cfg.DataflowName, cfg.ServiceName); err != nil {
-			return nil, fmt.Errorf("resource verification failed via ServiceDirector: %w", err)
+			return nil, fmt.Errorf("resource verification failed via Director: %w", err)
 		}
 		bqLogger.Info().Msg("Resource verification successful.")
 	} else {

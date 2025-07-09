@@ -13,14 +13,14 @@ import (
 	"github.com/rs/zerolog"
 )
 
-// Client communicates with the ServiceDirector API.
+// Client communicates with the Director API.
 type Client struct {
 	baseURL    *url.URL
 	httpClient *http.Client
 	logger     zerolog.Logger
 }
 
-// NewClient creates a new client for the ServiceDirector.
+// NewClient creates a new client for the Director.
 func NewClient(baseURL string, logger zerolog.Logger) (*Client, error) {
 	parsedURL, err := url.Parse(baseURL)
 	if err != nil {
@@ -36,10 +36,10 @@ func NewClient(baseURL string, logger zerolog.Logger) (*Client, error) {
 	}, nil
 }
 
-// VerifyDataflow contacts the ServiceDirector to ensure all resources for a given
+// VerifyDataflow contacts the Director to ensure all resources for a given
 // dataflow are created and available.
 func (c *Client) VerifyDataflow(ctx context.Context, dataflowName, serviceName string) error {
-	c.logger.Info().Str("dataflow", dataflowName).Str("service", serviceName).Msg("Verifying dataflow resources with ServiceDirector...")
+	c.logger.Info().Str("dataflow", dataflowName).Str("service", serviceName).Msg("Verifying dataflow resources with Director...")
 
 	relURL := &url.URL{Path: "/verify/dataflow"}
 	fullURL := c.baseURL.ResolveReference(relURL)
@@ -60,13 +60,13 @@ func (c *Client) VerifyDataflow(ctx context.Context, dataflowName, serviceName s
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("failed to send verification request to ServiceDirector: %w", err)
+		return fmt.Errorf("failed to send verification request to Director: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("ServiceDirector verification failed with status %d: %s", resp.StatusCode, string(bodyBytes))
+		return fmt.Errorf("Director verification failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	c.logger.Info().Str("dataflow", dataflowName).Msg("Dataflow resources verified successfully.")

@@ -7,214 +7,129 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/illmade-knight/go-cloud-manager/pkg/servicemanager"
 	"github.com/illmade-knight/go-iot-dataflows/builder"
-	"github.com/illmade-knight/go-iot/pkg/servicemanager"
 	"github.com/rs/zerolog"
 )
 
-// ServiceDirector implements the builder.Service interface.
-type ServiceDirector struct {
+// Director implements the builder.Service interface for our main application.
+type Director struct {
 	*builder.BaseServer
 	serviceManager *servicemanager.ServiceManager
-	servicesDef    servicemanager.ServicesDefinition
+	architecture   *servicemanager.MicroserviceArchitecture // Holds the loaded architecture
 	config         *Config
 	logger         zerolog.Logger
 }
 
-// NewServiceDirector creates and initializes a new ServiceDirector instance.
-// It now accepts a schemaRegistry to be passed down to the ServiceManager.
-func NewServiceDirector(ctx context.Context, cfg *Config, loader ServicesDefinitionLoader, schemaRegistry map[string]interface{}, logger zerolog.Logger) (*ServiceDirector, error) {
-	directorLogger := logger.With().Str("component", "ServiceDirector").Logger()
+// NewServiceDirector creates and initializes a new Director instance.
+func NewServiceDirector(ctx context.Context, cfg *Config, loader servicemanager.ArchitectureIO, schemaRegistry map[string]interface{}, logger zerolog.Logger) (*Director, error) {
+	directorLogger := logger.With().Str("component", "Director").Logger()
 
-	servicesDef, err := loader.Load(ctx)
+	// Load the entire microservice architecture using the provided loader.
+	arch, err := loader.LoadArchitecture(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("director: failed to load service definitions: %w", err)
 	}
+	logger.Info().Str("projectID", arch.ProjectID).Msg("loaded project architecture")
 
-	// If the provided schema registry is nil, create an empty one to avoid panics.
-	if schemaRegistry == nil {
-		schemaRegistry = make(map[string]interface{})
-	}
-
-	// Pass the provided schemaRegistry to the ServiceManager.
-	sm, err := servicemanager.NewServiceManager(ctx, servicesDef, cfg.Environment, schemaRegistry, directorLogger)
+	// Create the stateless ServiceManager engine, passing in the default environment for client creation.
+	sm, err := servicemanager.NewServiceManager(ctx, arch.Environment, schemaRegistry, nil, directorLogger)
 	if err != nil {
 		return nil, fmt.Errorf("director: failed to create ServiceManager: %w", err)
 	}
 
 	baseServer := builder.NewBaseServer(directorLogger, cfg.HTTPPort)
+
+	// Create the Director instance, storing both the engine (sm) and the config (arch).
+	d := &Director{
+		BaseServer:     baseServer,
+		serviceManager: sm,
+		architecture:   arch, // <-- The architecture is now stored here
+		config:         cfg,
+		logger:         directorLogger,
+	}
+
+	// Register handlers as methods on the Director struct.
+	// This gives them access to the stored architecture via the `d` receiver.
 	mux := baseServer.Mux()
-
-	// Orchestration Endpoints
-	mux.HandleFunc("/orchestrate/setup", func(w http.ResponseWriter, r *http.Request) {
-		setupHandler(sm, cfg.Environment, directorLogger, w, r)
-	})
-	mux.HandleFunc("/orchestrate/teardown", func(w http.ResponseWriter, r *http.Request) {
-		teardownHandler(sm, cfg.Environment, directorLogger, w, r)
-	})
-
-	// Configuration Serving Endpoint
-	mux.HandleFunc("/config/", func(w http.ResponseWriter, r *http.Request) {
-		configHandler(servicesDef, directorLogger, w, r)
-	})
-
-	// --- NEW: Verification Endpoint ---
-	mux.HandleFunc("/verify/dataflow", func(w http.ResponseWriter, r *http.Request) {
-		verifyHandler(sm, cfg.Environment, directorLogger, w, r)
-	})
+	mux.HandleFunc("/orchestrate/setup", d.setupHandler)
+	mux.HandleFunc("/orchestrate/teardown", d.teardownHandler)
+	mux.HandleFunc("/verify/dataflow", d.verifyHandler)
 
 	directorLogger.Info().
 		Str("http_port", cfg.HTTPPort).
-		Str("environment", cfg.Environment).
 		Str("services_def_source", cfg.ServicesDefSourceType).
-		Msg("ServiceDirector initialized.")
+		Msg("Director initialized.")
 
-	return &ServiceDirector{
-		BaseServer:     baseServer,
-		serviceManager: sm,
-		servicesDef:    servicesDef,
-		config:         cfg,
-		logger:         directorLogger,
-	}, nil
+	return d, nil
 }
 
-// ... Start, Shutdown, Mux, GetHTTPPort methods remain the same ...
-
-func (sd *ServiceDirector) Start() error {
-	sd.logger.Info().Msg("Starting ServiceDirector...")
-	if err := sd.BaseServer.Start(); err != nil {
-		sd.logger.Error().Err(err).Msg("ServiceDirector HTTP server failed to start")
-		return err
-	}
-	sd.logger.Info().Msg("ServiceDirector started successfully.")
-	return nil
+// Start, Shutdown, and other builder methods remain the same.
+func (d *Director) Start() error {
+	return d.BaseServer.Start()
 }
 
-func (sd *ServiceDirector) Shutdown() {
-	sd.logger.Info().Msg("Shutting down ServiceDirector...")
-	sd.BaseServer.Shutdown()
-	sd.logger.Info().Msg("ServiceDirector shut down gracefully.")
-}
-
-func (sd *ServiceDirector) Mux() *http.ServeMux {
-	return sd.BaseServer.Mux()
-}
-
-func (sd *ServiceDirector) GetHTTPPort() string {
-	return sd.BaseServer.GetHTTPPort()
-}
-
-// --- Handlers ---
+// --- Handlers as Methods ---
 
 // VerifyDataflowRequest is the expected payload for the verification endpoint.
 type VerifyDataflowRequest struct {
 	DataflowName string `json:"dataflow_name"`
-	ServiceName  string `json:"service_name"`
+	ServiceName  string `json:"service_name"` // Included for logging/auditing
 }
 
-// verifyHandler handles requests from microservices to verify their dataflow resources.
-func verifyHandler(sm *servicemanager.ServiceManager, env string, logger zerolog.Logger, w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req VerifyDataflowRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
-		return
-	}
-
-	if req.DataflowName == "" || req.ServiceName == "" {
-		http.Error(w, "dataflow_name and service_name must be provided", http.StatusBadRequest)
-		return
-	}
-
-	logger.Info().Str("dataflow", req.DataflowName).Str("service", req.ServiceName).Msg("Received request to verify dataflow.")
-
-	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
-	defer cancel()
-
-	// Use the ServiceManager to perform the verification.
-	err := sm.VerifyDataflow(ctx, env, req.DataflowName)
-	if err != nil {
-		logger.Error().Err(err).Str("dataflow", req.DataflowName).Msg("Dataflow verification failed")
-		http.Error(w, fmt.Sprintf("Dataflow '%s' verification failed: %v", req.DataflowName, err), http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte(fmt.Sprintf("Dataflow '%s' verified successfully for service '%s'.", req.DataflowName, req.ServiceName)))
-	logger.Info().Str("dataflow", req.DataflowName).Msg("Successfully completed verification of dataflow.")
-}
-
-// setupHandler, teardownHandler, and configHandler remain the same
-func setupHandler(sm *servicemanager.ServiceManager, env string, logger zerolog.Logger, w http.ResponseWriter, r *http.Request) {
-	logger.Info().Msg("Received request to setup all dataflows.")
+// setupHandler now calls the stateless SetupAll method.
+func (d *Director) setupHandler(w http.ResponseWriter, r *http.Request) {
+	d.logger.Info().Msg("Received request to setup all dataflows.")
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	_, err := sm.SetupAll(ctx, env)
-	if err != nil {
-		logger.Error().Err(err).Msg("Failed to setup all dataflows")
+	if _, err := d.serviceManager.SetupAll(ctx, d.architecture); err != nil {
+		d.logger.Error().Err(err).Msg("Failed to setup all dataflows")
 		http.Error(w, fmt.Sprintf("Failed to setup all dataflows: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("All dataflows set up successfully."))
-	logger.Info().Msg("Successfully completed setup of all dataflows.")
+	d.logger.Info().Msg("Successfully completed setup of all dataflows.")
 }
 
-func teardownHandler(sm *servicemanager.ServiceManager, env string, logger zerolog.Logger, w http.ResponseWriter, r *http.Request) {
-	logger.Info().Msg("Received request to teardown ephemeral dataflows.")
+// teardownHandler now calls the stateless TeardownAll method.
+func (d *Director) teardownHandler(w http.ResponseWriter, r *http.Request) {
+	d.logger.Info().Msg("Received request to teardown ephemeral dataflows.")
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	err := sm.TeardownAll(ctx, env)
-	if err != nil {
-		logger.Error().Err(err).Msg("Failed to teardown all dataflows")
+	if err := d.serviceManager.TeardownAll(ctx, d.architecture); err != nil {
+		d.logger.Error().Err(err).Msg("Failed to teardown all dataflows")
 		http.Error(w, fmt.Sprintf("Failed to teardown all dataflows: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte("All ephemeral dataflows torn down successfully."))
-	logger.Info().Msg("Successfully completed teardown of ephemeral dataflows.")
 }
 
-func configHandler(servicesDef servicemanager.ServicesDefinition, logger zerolog.Logger, w http.ResponseWriter, r *http.Request) {
-	serviceName := r.URL.Path[len("/config/"):]
-	if serviceName == "" {
-		http.Error(w, "Service name not provided in path, e.g., /config/my-service", http.StatusBadRequest)
+// verifyHandler handles requests from microservices to verify their dataflow resources.
+func (d *Director) verifyHandler(w http.ResponseWriter, r *http.Request) {
+	var req VerifyDataflowRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	logger.Info().Str("service_name", serviceName).Msg("Received request for service configuration.")
+	d.logger.Info().Str("dataflow", req.DataflowName).Str("service", req.ServiceName).Msg("Received request to verify dataflow.")
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
 
-	svcSpec, err := servicesDef.GetService(serviceName)
+	// Use the ServiceManager to perform the verification, passing in the architecture.
+	err := d.serviceManager.VerifyDataflow(ctx, d.architecture, req.DataflowName)
 	if err != nil {
-		logger.Warn().Err(err).Str("service_name", serviceName).Msg("Service configuration not found")
-		http.Error(w, fmt.Sprintf("Service '%s' configuration not found: %v", serviceName, err), http.StatusNotFound)
+		d.logger.Error().Err(err).Str("dataflow", req.DataflowName).Msg("Dataflow verification failed")
+		http.Error(w, fmt.Sprintf("Dataflow '%s' verification failed: %v", req.DataflowName, err), http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(svcSpec); err != nil {
-		logger.Error().Err(err).Str("service_name", serviceName).Msg("Failed to encode service configuration to JSON")
-		http.Error(w, "Internal server error: Failed to encode config", http.StatusInternalServerError)
-		return
-	}
-
-	logger.Info().Str("service_name", serviceName).Msg("Successfully served service configuration.")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(fmt.Sprintf("Dataflow '%s' verified successfully.", req.DataflowName)))
 }

@@ -3,7 +3,6 @@
 package e2e
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"google.golang.org/api/iterator"
@@ -14,12 +13,11 @@ import (
 	"time"
 
 	bq "cloud.google.com/go/bigquery"
-	"cloud.google.com/go/pubsub"
 	"github.com/google/uuid"
+	"github.com/illmade-knight/go-cloud-manager/pkg/servicemanager"
 	"github.com/illmade-knight/go-iot-dataflows/builder"
 	"github.com/illmade-knight/go-iot/helpers/emulators"
 	"github.com/illmade-knight/go-iot/helpers/loadgen"
-	"github.com/illmade-knight/go-iot/pkg/servicemanager"
 	"github.com/rs/zerolog/log"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/api/option"
@@ -31,6 +29,28 @@ const (
 	fullBigQueryTestRate              = 2.0
 )
 
+// inMemoryLoader is a test-specific implementation of ArchitectureLoader.
+// It satisfies the interface by simply returning a pre-configured struct,
+// decoupling the E2E test from the file system.
+type inMemoryLoader struct {
+	arch *servicemanager.MicroserviceArchitecture
+}
+
+func (l *inMemoryLoader) LoadArchitecture(ctx context.Context) (*servicemanager.MicroserviceArchitecture, error) {
+	if l.arch == nil {
+		return nil, fmt.Errorf("inMemoryLoader: architecture is nil")
+	}
+	return l.arch, nil
+}
+
+func (l *inMemoryLoader) LoadResourceGroup(ctx context.Context, name string) (*servicemanager.ResourceGroup, error) {
+	return nil, nil
+}
+
+func (l *inMemoryLoader) WriteProvisionedResources(ctx context.Context, resources *servicemanager.ProvisionedResources) error {
+	return nil
+}
+
 func TestFullDataflowE2E(t *testing.T) {
 	projectID := os.Getenv("GOOGLE_CLOUD_PROJECT")
 	if projectID == "" {
@@ -38,13 +58,7 @@ func TestFullDataflowE2E(t *testing.T) {
 	}
 	if os.Getenv("GOOGLE_APPLICATION_CREDENTIALS") == "" {
 		log.Warn().Msg("GOOGLE_APPLICATION_CREDENTIALS not set, relying on Application Default Credentials (ADC).")
-		adcCheckCtx, adcCheckCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer adcCheckCancel()
-		realPubSubClient, errAdc := pubsub.NewClient(adcCheckCtx, projectID)
-		if errAdc != nil {
-			t.Skipf("Skipping cloud test: ADC check failed: %v. Please configure ADC or set GOOGLE_APPLICATION_CREDENTIALS.", errAdc)
-		}
-		realPubSubClient.Close()
+		checkGCPAuth(t)
 	}
 
 	// --- Timing & Metrics Setup ---
@@ -83,33 +97,37 @@ func TestFullDataflowE2E(t *testing.T) {
 
 	// 2. Build the services definition in memory.
 	schemaIdentifier := "github.com/illmade-knight/go-iot-dataflows/dataflow/devflow/e2e.TestPayload"
-	servicesConfig := &servicemanager.TopLevelConfig{
-		DefaultProjectID: projectID,
-		Environments: map[string]servicemanager.EnvironmentSpec{
-			"dev": {ProjectID: projectID},
+	servicesConfig := &servicemanager.MicroserviceArchitecture{
+		Environment: servicemanager.Environment{
+			Name:      "e2e",
+			ProjectID: projectID,
+			Location:  "US",
 		},
-		Dataflows: []servicemanager.ResourceGroup{
-			{
+		Dataflows: map[string]servicemanager.ResourceGroup{
+			dataflowName: {
 				Name:      dataflowName,
 				Lifecycle: &servicemanager.LifecyclePolicy{Strategy: servicemanager.LifecycleStrategyEphemeral},
-				Resources: servicemanager.ResourcesSpec{
-					Topics:           []servicemanager.TopicConfig{{Name: uniqueTopicID}},
-					Subscriptions:    []servicemanager.SubscriptionConfig{{Name: uniqueSubID, Topic: uniqueTopicID}},
-					BigQueryDatasets: []servicemanager.BigQueryDataset{{Name: uniqueDatasetID}},
+				Resources: servicemanager.CloudResourcesSpec{
+					Topics: []servicemanager.TopicConfig{{CloudResource: servicemanager.CloudResource{Name: uniqueTopicID}}},
+					Subscriptions: []servicemanager.SubscriptionConfig{
+						{
+							CloudResource: servicemanager.CloudResource{Name: uniqueSubID},
+							Topic:         uniqueTopicID,
+						},
+					},
+					BigQueryDatasets: []servicemanager.BigQueryDataset{{CloudResource: servicemanager.CloudResource{Name: uniqueDatasetID}}},
 					BigQueryTables: []servicemanager.BigQueryTable{
 						{
-							Name:                   uniqueTableID,
+							CloudResource:          servicemanager.CloudResource{Name: uniqueTableID},
 							Dataset:                uniqueDatasetID,
-							SchemaSourceType:       "go_struct",
 							SchemaSourceIdentifier: schemaIdentifier,
+							ClusteringFields:       []string{"device_id"}, // <-- ADD THIS LINE
 						},
 					},
 				},
 			},
 		},
 	}
-	servicesDef, err := servicemanager.NewInMemoryServicesDefinition(servicesConfig)
-	require.NoError(t, err)
 
 	schemaRegistry := map[string]interface{}{
 		schemaIdentifier: TestPayload{},
@@ -129,15 +147,16 @@ func TestFullDataflowE2E(t *testing.T) {
 	timings["EmulatorSetup(MQTT)"] = time.Since(start).String()
 
 	start = time.Now()
-	directorService, directorURL := startServiceDirector(t, ctx, logger.With().Str("service", "servicedirector").Logger(), servicesDef, schemaRegistry)
+	// Call the new, refactored startServiceDirector helper.
+	directorService, directorURL := startServiceDirector(t, ctx, logger.With().Str("service", "servicedirector").Logger(), servicesConfig, schemaRegistry)
 	t.Cleanup(directorService.Shutdown)
 	timings["ServiceStartup(Director)"] = time.Since(start).String()
 
 	start = time.Now()
 	setupURL := directorURL + "/orchestrate/setup"
-	resp, err := http.Post(setupURL, "application/json", bytes.NewBuffer([]byte{}))
+	resp, err := http.Post(setupURL, "application/json", nil)
 	require.NoError(t, err)
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(t, http.StatusOK, resp.StatusCode, "Director setup call should succeed")
 	resp.Body.Close()
 	timings["CloudResourceSetup(Director)"] = time.Since(start).String()
 

@@ -6,10 +6,10 @@ import (
 	"cloud.google.com/go/pubsub"
 	"context"
 	"fmt"
+	"github.com/illmade-knight/go-cloud-manager/microservice"
 	"net/http"
 
-	"github.com/illmade-knight/go-iot-dataflows/builder"
-	"github.com/illmade-knight/go-iot-dataflows/builder/servicedirector"
+	"github.com/illmade-knight/go-cloud-manager/microservice/servicedirector"
 
 	"github.com/illmade-knight/go-iot/pkg/bqstore"
 	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
@@ -21,7 +21,7 @@ import (
 // BQServiceWrapper wraps your existing ProcessingService for a common interface.
 // It implements the builder.Service interface.
 type BQServiceWrapper[T any] struct {
-	*builder.BaseServer
+	*microservice.BaseServer
 	processingService *messagepipeline.ProcessingService[T]
 	bqClient          *bigquery.Client
 	pubsubClient      *pubsub.Client
@@ -111,7 +111,7 @@ func NewBQServiceWrapper[T any](
 		return nil, fmt.Errorf("failed to create processing service: %w", err)
 	}
 
-	baseServer := builder.NewBaseServer(logger, cfg.HTTPPort)
+	baseServer := microservice.NewBaseServer(logger, cfg.HTTPPort)
 
 	return &BQServiceWrapper[T]{
 		BaseServer:        baseServer,

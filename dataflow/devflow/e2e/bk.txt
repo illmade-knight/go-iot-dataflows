@@ -1,8 +1,0 @@
-
-I want to refactor a working test to use reuseable helpers
-
-in this enrichment_test we want to move the firestore setup and teardown to a helper setupEnrichmentTestData
-
-can you help with this refactor - check this will not cause an issues with the working test and refactor only the code
-directly involved - I want to see the complete refactored file but with only the change to use setupEnrichmentTestData
-if there are any additional changes to those requested I will see that as a critical fault

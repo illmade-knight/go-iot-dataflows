@@ -6,8 +6,10 @@ import (
 	"cloud.google.com/go/pubsub"
 	"context"
 	"fmt"
-	"github.com/illmade-knight/go-iot-dataflows/builder"
-	"github.com/illmade-knight/go-iot-dataflows/builder/servicedirector"
+	"github.com/illmade-knight/go-cloud-manager/microservice"
+
+	"github.com/illmade-knight/go-cloud-manager/microservice/servicedirector"
+
 	"github.com/illmade-knight/go-iot/pkg/device"
 	"github.com/illmade-knight/go-iot/pkg/enrichment"
 	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
@@ -19,7 +21,7 @@ import (
 
 // EnrichmentServiceWrapper wraps the processing service for a common interface.
 type EnrichmentServiceWrapper[T any] struct {
-	*builder.BaseServer
+	*microservice.BaseServer
 	wrapperContext         context.Context
 	serviceCancel          context.CancelFunc
 	processingService      *messagepipeline.ProcessingService[T]
@@ -118,7 +120,7 @@ func NewPublishMessageEnrichmentServiceWrapper(
 	processingService, err := messagepipeline.NewProcessingService[types.PublishMessage](2, consumer, mainProducer, enricher, logger)
 
 	// --- Setup Base Server ---
-	baseServer := builder.NewBaseServer(enrichmentLogger, cfg.HTTPPort)
+	baseServer := microservice.NewBaseServer(enrichmentLogger, cfg.HTTPPort)
 
 	return &EnrichmentServiceWrapper[types.PublishMessage]{
 		BaseServer:             baseServer,

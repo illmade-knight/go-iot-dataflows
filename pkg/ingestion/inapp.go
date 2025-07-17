@@ -4,11 +4,12 @@ package ingestion
 import (
 	"context"
 	"fmt"
+	"github.com/illmade-knight/go-cloud-manager/microservice"
 	"net/http"
 
+	"github.com/illmade-knight/go-cloud-manager/microservice/servicedirector"
+
 	"cloud.google.com/go/pubsub"
-	"github.com/illmade-knight/go-iot-dataflows/builder"
-	"github.com/illmade-knight/go-iot-dataflows/builder/servicedirector"
 	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 	"github.com/rs/zerolog"
 	"google.golang.org/api/option"
@@ -16,7 +17,7 @@ import (
 
 // IngestionServiceWrapper wraps the core MQTT ingestion logic.
 type IngestionServiceWrapper struct {
-	*builder.BaseServer
+	*microservice.BaseServer
 	ingestionService *mqttconverter.IngestionService
 	pubsubClient     *pubsub.Client
 	logger           zerolog.Logger
@@ -81,7 +82,7 @@ func NewIngestionServiceWrapper(
 		cfg.MQTT,
 	)
 
-	baseServer := builder.NewBaseServer(ingestionLogger, cfg.HTTPPort)
+	baseServer := microservice.NewBaseServer(ingestionLogger, cfg.HTTPPort)
 
 	return &IngestionServiceWrapper{
 		BaseServer:       baseServer,

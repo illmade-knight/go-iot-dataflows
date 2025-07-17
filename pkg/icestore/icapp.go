@@ -6,10 +6,10 @@ import (
 	"cloud.google.com/go/storage"
 	"context"
 	"fmt"
+	"github.com/illmade-knight/go-cloud-manager/microservice"
 	"os"
 	"strings"
 
-	"github.com/illmade-knight/go-iot-dataflows/builder"   // Import the builder for common interfaces
 	"github.com/illmade-knight/go-iot/pkg/icestore"        // Existing icestore package from go-iot
 	"github.com/illmade-knight/go-iot/pkg/messagepipeline" // For MetricReporter
 	"github.com/rs/zerolog"
@@ -19,13 +19,13 @@ import (
 // IceStoreServiceWrapper wraps the IceStorageService for a common interface.
 // It implements the builder.Service interface.
 type IceStoreServiceWrapper struct {
-	*builder.BaseServer                                                           // Embed the base server for common HTTP functionality
-	processingService   *messagepipeline.ProcessingService[icestore.ArchivalData] // The core processing logic
-	pubsubClient        *pubsub.Client                                            // Pub/Sub client for message consumption
-	gcsClient           *storage.Client                                           // GCS client for data archival
-	logger              zerolog.Logger
-	bucketName          string // The GCS bucket name, needed for create/delete
-	projectID           string // The GCP Project ID, needed for bucket creation
+	*microservice.BaseServer                                                           // Embed the base server for common HTTP functionality
+	processingService        *messagepipeline.ProcessingService[icestore.ArchivalData] // The core processing logic
+	pubsubClient             *pubsub.Client                                            // Pub/Sub client for message consumption
+	gcsClient                *storage.Client                                           // GCS client for data archival
+	logger                   zerolog.Logger
+	bucketName               string // The GCS bucket name, needed for create/delete
+	projectID                string // The GCP Project ID, needed for bucket creation
 }
 
 // NewIceStoreServiceWrapper creates and configures a new IceStoreServiceWrapper instance.
@@ -120,7 +120,7 @@ func NewIceStoreServiceWrapper(cfg *Config, logger zerolog.Logger) (*IceStoreSer
 		return nil, fmt.Errorf("failed to create processing service: %w", err)
 	}
 
-	baseServer := builder.NewBaseServer(logger, cfg.HTTPPort)
+	baseServer := microservice.NewBaseServer(logger, cfg.HTTPPort)
 
 	return &IceStoreServiceWrapper{
 		BaseServer:        baseServer,

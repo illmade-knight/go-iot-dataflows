@@ -83,5 +83,5 @@ func LoadConfig() (*Config, error) {
 		cfg.HTTPPort = ":" + port
 	}
 
-	return &cfg, nil
+	return cfg, nil
 }

@@ -2,13 +2,13 @@ package enrichment
 
 import (
 	"flag"
-	"github.com/illmade-knight/go-iot-dataflows/pkg"
 	"os"
 	"time"
 
 	"github.com/illmade-knight/go-cloud-manager/microservice"
-	"github.com/illmade-knight/go-iot/pkg/device"
-	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
+	"github.com/illmade-knight/go-dataflow/pkg/cache"
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
+	"github.com/illmade-knight/go-iot-dataflows/pkg"
 )
 
 // Consumer defines the configuration for the Pub/Sub subscriber.
@@ -18,8 +18,8 @@ type Consumer struct {
 
 // CacheConfig defines settings for device metadata caching.
 type CacheConfig struct {
-	RedisConfig     device.RedisConfig
-	FirestoreConfig *device.FirestoreFetcherConfig
+	RedisConfig     cache.RedisConfig
+	FirestoreConfig *cache.FirestoreConfig
 }
 
 // ProcessorConfig holds settings specific to the message processing workers.
@@ -58,7 +58,7 @@ func LoadConfig() (*Config, error) {
 		ServiceDirectorURL: "",
 		ProducerConfig:     &messagepipeline.GooglePubsubProducerConfig{},
 		CacheConfig: CacheConfig{
-			FirestoreConfig: &device.FirestoreFetcherConfig{},
+			FirestoreConfig: &cache.FirestoreConfig{},
 		},
 	}
 	cfg.Consumer.SubscriptionID = "dev-enrichment-sub"

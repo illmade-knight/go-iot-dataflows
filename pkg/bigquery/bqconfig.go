@@ -2,12 +2,12 @@ package bigquery
 
 import (
 	"flag"
-	"github.com/illmade-knight/go-iot-dataflows/pkg"
 	"os"
 	"time"
 
 	"github.com/illmade-knight/go-cloud-manager/microservice"
-	"github.com/illmade-knight/go-iot/pkg/bqstore"
+	"github.com/illmade-knight/go-dataflow/pkg/bqstore"
+	"github.com/illmade-knight/go-iot-dataflows/pkg"
 )
 
 // Consumer defines the configuration for the Pub/Sub subscriber.

@@ -6,12 +6,13 @@ import (
 	"cloud.google.com/go/storage"
 	"context"
 	"fmt"
-	"github.com/illmade-knight/go-cloud-manager/microservice"
 	"os"
 	"strings"
 
-	"github.com/illmade-knight/go-iot/pkg/icestore"        // Existing icestore package from go-iot
-	"github.com/illmade-knight/go-iot/pkg/messagepipeline" // For MetricReporter
+	"github.com/illmade-knight/go-cloud-manager/microservice"
+	"github.com/illmade-knight/go-dataflow/pkg/icestore"        // Existing icestore package from go-iot
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline" // For MetricReporter
+
 	"github.com/rs/zerolog"
 	"google.golang.org/api/option"
 )
@@ -29,62 +30,65 @@ type IceStoreServiceWrapper struct {
 }
 
 // NewIceStoreServiceWrapper creates and configures a new IceStoreServiceWrapper instance.
-// It initializes all necessary components: GCS client, Pub/Sub client,
-// Pub/Sub consumer, GCS batch processor, and the core processing service.
-func NewIceStoreServiceWrapper(cfg *Config, logger zerolog.Logger) (*IceStoreServiceWrapper, error) {
-	ctx := context.Background() // Use a context that can be managed by the main lifecycle
+func NewIceStoreServiceWrapper(
+	cfg *Config,
+	logger zerolog.Logger,
+) (wrapper *IceStoreServiceWrapper, err error) { // 1. Named error return
+	ctx := context.Background()
 	isLogger := logger.With().Str("component", "IceStore").Logger()
 
-	// Determine general GCP client options (credentials file or ADC).
+	// --- Client variables to be cleaned up by defer on failure ---
+	var gcsClient *storage.Client
+	var psClient *pubsub.Client
+
+	// 2. Single defer block for cleanup on initialization failure.
+	defer func() {
+		if err != nil {
+			// If an error occurred, clean up any clients that were successfully created.
+			if gcsClient != nil {
+				gcsClient.Close()
+			}
+			if psClient != nil {
+				psClient.Close()
+			}
+		}
+	}()
+
 	var generalOpts []option.ClientOption
 	if cfg.CredentialsFile != "" {
 		generalOpts = append(generalOpts, option.WithCredentialsFile(cfg.CredentialsFile))
-		isLogger.Info().Str("credentials_file", cfg.CredentialsFile).Msg("Using specified general credentials file for GCP clients")
-	} else {
-		isLogger.Info().Msg("Using Application Default Credentials (ADC) for general GCP clients")
 	}
 
-	// --- GCS Client Initialization ---
-	gcsOpts := make([]option.ClientOption, len(generalOpts))
-	copy(gcsOpts, generalOpts)
+	gcsOpts := append([]option.ClientOption{}, generalOpts...)
 	if cfg.IceStore.CredentialsFile != "" {
 		gcsOpts = []option.ClientOption{option.WithCredentialsFile(cfg.IceStore.CredentialsFile)}
-		isLogger.Info().Str("credentials_file", cfg.IceStore.CredentialsFile).Msg("Using service-specific credentials file for GCS client")
 	}
 
 	if emulatorHost := os.Getenv("STORAGE_EMULATOR_HOST"); emulatorHost != "" {
 		gcsOpts = append(gcsOpts, option.WithoutAuthentication(), option.WithEndpoint(emulatorHost))
-		isLogger.Info().Str("emulator_host", emulatorHost).Msg("Configuring GCS client for emulator.")
 	}
 
-	gcsClient, err := storage.NewClient(ctx, gcsOpts...)
+	gcsClient, err = storage.NewClient(ctx, gcsOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GCS client: %w", err)
 	}
 
-	// --- Pub/Sub Client Initialization ---
-	psOpts := make([]option.ClientOption, len(generalOpts))
-	copy(psOpts, generalOpts)
+	psOpts := append([]option.ClientOption{}, generalOpts...)
 	if cfg.Consumer.CredentialsFile != "" {
 		psOpts = []option.ClientOption{option.WithCredentialsFile(cfg.Consumer.CredentialsFile)}
-		isLogger.Info().Str("credentials_file", cfg.Consumer.CredentialsFile).Msg("Using service-specific credentials file for Pub/Sub consumer")
 	}
 
-	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID, psOpts...)
+	psClient, err = pubsub.NewClient(ctx, cfg.ProjectID, psOpts...)
 	if err != nil {
-		gcsClient.Close()
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
 
-	// --- Service Component Creation ---
 	consumerCfg := &messagepipeline.GooglePubsubConsumerConfig{
 		ProjectID:      cfg.ProjectID,
 		SubscriptionID: cfg.Consumer.SubscriptionID,
 	}
 	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, logger)
 	if err != nil {
-		gcsClient.Close()
-		psClient.Close()
 		return nil, fmt.Errorf("failed to create Pub/Sub consumer: %w", err)
 	}
 
@@ -101,8 +105,6 @@ func NewIceStoreServiceWrapper(cfg *Config, logger zerolog.Logger) (*IceStoreSer
 		logger,
 	)
 	if err != nil {
-		gcsClient.Close()
-		psClient.Close()
 		return nil, fmt.Errorf("failed to create GCS batch processor: %w", err)
 	}
 
@@ -110,12 +112,10 @@ func NewIceStoreServiceWrapper(cfg *Config, logger zerolog.Logger) (*IceStoreSer
 		cfg.BatchProcessing.NumWorkers,
 		consumer,
 		batcher,
-		icestore.ArchivalTransformer, // Assuming this transformer is appropriate for your archival data
+		icestore.ArchivalTransformer,
 		logger,
 	)
 	if err != nil {
-		gcsClient.Close()
-		psClient.Close()
 		batcher.Stop()
 		return nil, fmt.Errorf("failed to create processing service: %w", err)
 	}

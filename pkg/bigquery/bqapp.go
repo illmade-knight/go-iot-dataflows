@@ -6,13 +6,12 @@ import (
 	"cloud.google.com/go/pubsub"
 	"context"
 	"fmt"
-	"github.com/illmade-knight/go-cloud-manager/microservice"
 	"net/http"
 
+	"github.com/illmade-knight/go-cloud-manager/microservice"
 	"github.com/illmade-knight/go-cloud-manager/microservice/servicedirector"
-
-	"github.com/illmade-knight/go-iot/pkg/bqstore"
-	"github.com/illmade-knight/go-iot/pkg/messagepipeline"
+	"github.com/illmade-knight/go-dataflow/pkg/bqstore"
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 
 	"github.com/rs/zerolog"
 	"google.golang.org/api/option"
@@ -33,18 +32,35 @@ func NewBQServiceWrapper[T any](
 	cfg *Config,
 	logger zerolog.Logger,
 	transformer messagepipeline.MessageTransformer[T],
-) (*BQServiceWrapper[T], error) {
+) (wrapper *BQServiceWrapper[T], err error) { // 1. Named error return
 
 	ctx := context.Background()
 	bqLogger := logger.With().Str("component", "BQService").Logger()
 
-	// --- Verify resources with Director ---
+	// --- Client variables to be cleaned up by defer on failure ---
+	var bqClient *bigquery.Client
+	var psClient *pubsub.Client
+
+	// 2. Single defer block for cleanup on initialization failure.
+	defer func() {
+		if err != nil {
+			// If an error occurred, clean up any clients that were successfully created.
+			if bqClient != nil {
+				bqClient.Close()
+			}
+			if psClient != nil {
+				psClient.Close()
+			}
+		}
+	}()
+
 	if cfg.ServiceDirectorURL != "" {
-		directorClient, err := servicedirector.NewClient(cfg.ServiceDirectorURL, bqLogger)
+		var directorClient *servicedirector.Client
+		directorClient, err = servicedirector.NewClient(cfg.ServiceDirectorURL, bqLogger)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create service director client: %w", err)
 		}
-		if err := directorClient.VerifyDataflow(ctx, cfg.DataflowName, cfg.ServiceName); err != nil {
+		if err = directorClient.VerifyDataflow(ctx, cfg.DataflowName, cfg.ServiceName); err != nil {
 			return nil, fmt.Errorf("resource verification failed via Director: %w", err)
 		}
 		bqLogger.Info().Msg("Resource verification successful.")
@@ -52,20 +68,19 @@ func NewBQServiceWrapper[T any](
 		bqLogger.Warn().Msg("ServiceDirectorURL not set, skipping resource verification.")
 	}
 
-	// --- Initialize service components ---
 	var opts []option.ClientOption
 	if cfg.CredentialsFile != "" {
 		opts = append(opts, option.WithCredentialsFile(cfg.CredentialsFile))
 	}
 
-	bqClient, err := bigquery.NewClient(ctx, cfg.ProjectID, opts...)
+	// 3. Simplified sequential resource creation.
+	bqClient, err = bigquery.NewClient(ctx, cfg.ProjectID, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create BigQuery client: %w", err)
 	}
 
-	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID, opts...)
+	psClient, err = pubsub.NewClient(ctx, cfg.ProjectID, opts...)
 	if err != nil {
-		bqClient.Close()
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
 
@@ -75,8 +90,6 @@ func NewBQServiceWrapper[T any](
 	}
 	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, logger)
 	if err != nil {
-		bqClient.Close()
-		psClient.Close()
 		return nil, fmt.Errorf("failed to create Pub/Sub consumer: %w", err)
 	}
 
@@ -87,8 +100,6 @@ func NewBQServiceWrapper[T any](
 	}
 	bigQueryInserter, err := bqstore.NewBigQueryInserter[T](ctx, bqClient, bqInserterCfg, logger)
 	if err != nil {
-		bqClient.Close()
-		psClient.Close()
 		return nil, fmt.Errorf("failed to create BigQuery inserter: %w", err)
 	}
 
@@ -106,13 +117,14 @@ func NewBQServiceWrapper[T any](
 		logger,
 	)
 	if err != nil {
-		bqClient.Close()
-		psClient.Close()
+		// No need to clean up consumer/inserter, as they are not returned.
+		// The top-level defer will clean up bqClient and psClient.
 		return nil, fmt.Errorf("failed to create processing service: %w", err)
 	}
 
 	baseServer := microservice.NewBaseServer(logger, cfg.HTTPPort)
 
+	// 4. On success, return the fully constructed wrapper.
 	return &BQServiceWrapper[T]{
 		BaseServer:        baseServer,
 		processingService: processingService,

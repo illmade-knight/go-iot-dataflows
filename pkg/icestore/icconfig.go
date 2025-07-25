@@ -3,11 +3,11 @@ package icestore
 import (
 	"flag"
 	"fmt"
-	"github.com/illmade-knight/go-iot-dataflows/pkg"
 	"os"
 	"time"
 
 	"github.com/illmade-knight/go-cloud-manager/microservice"
+	"github.com/illmade-knight/go-iot-dataflows/pkg"
 )
 
 // Consumer defines the configuration for the Pub/Sub subscriber.

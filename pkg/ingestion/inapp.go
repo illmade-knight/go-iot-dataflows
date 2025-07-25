@@ -1,82 +1,79 @@
-// github.com/illmade-knight/go-iot-dataflows/builder/ingestion/app.go
+// builder/ingestion/inapp.go
 package ingestion
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"github.com/illmade-knight/go-cloud-manager/microservice"
 	"net/http"
-
-	"github.com/illmade-knight/go-cloud-manager/microservice/servicedirector"
+	"time"
 
 	"cloud.google.com/go/pubsub"
-	"github.com/illmade-knight/go-iot/pkg/mqttconverter"
 	"github.com/rs/zerolog"
-	"google.golang.org/api/option"
+
+	"github.com/illmade-knight/go-cloud-manager/microservice"
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
+	"github.com/illmade-knight/go-iot-dataflows/pkg/mqttconverter"
 )
+
+// RawMessage defines the canonical structure for messages published by this service.
+type RawMessage struct {
+	Topic     string          `json:"topic"`
+	Payload   json.RawMessage `json:"payload"`
+	Timestamp string          `json:"timestamp"`
+}
 
 // IngestionServiceWrapper wraps the core MQTT ingestion logic.
 type IngestionServiceWrapper struct {
 	*microservice.BaseServer
-	ingestionService *mqttconverter.IngestionService
+	ingestionService *mqttconverter.IngestionService[RawMessage] // Now generic
 	pubsubClient     *pubsub.Client
 	logger           zerolog.Logger
 }
 
-// NewIngestionServiceWrapper creates and configures a new IngestionServiceWrapper.
-// It now performs a resource verification check against the Director on startup.
-// NewIngestionServiceWrapper creates and configures a new IngestionServiceWrapper.
-// It is now updated to accept an AttributeExtractor to enable attribute injection.
+// NewIngestionServiceWrapper creates and configures the full ingestion service.
 func NewIngestionServiceWrapper(
 	cfg *Config,
-	extractor mqttconverter.AttributeExtractor, // CORRECTED: Added extractor parameter
 	logger zerolog.Logger,
-	serviceName string,
-	dataflowName string,
-) (*IngestionServiceWrapper, error) {
+) (wrapper *IngestionServiceWrapper, err error) {
 	ctx := context.Background()
 	ingestionLogger := logger.With().Str("component", "IngestionService").Logger()
 
-	// --- Verify resources with Director ---
-	if cfg.ServiceDirectorURL != "" {
-		directorClient, err := servicedirector.NewClient(cfg.ServiceDirectorURL, ingestionLogger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create service director client: %w", err)
+	var psClient *pubsub.Client
+	defer func() {
+		if err != nil && psClient != nil {
+			psClient.Close()
 		}
-		if err := directorClient.VerifyDataflow(ctx, dataflowName, serviceName); err != nil {
-			return nil, fmt.Errorf("resource verification failed via Director: %w", err)
-		}
-	} else {
-		ingestionLogger.Warn().Msg("ServiceDirectorURL not set, skipping resource verification. This is not recommended for production.")
-	}
+	}()
 
-	// --- Initialize service components ---
-	var opts []option.ClientOption
-	if cfg.Publisher.CredentialsFile != "" {
-		opts = append(opts, option.WithCredentialsFile(cfg.Publisher.CredentialsFile))
-		ingestionLogger.Info().Str("credentials_file", cfg.Publisher.CredentialsFile).Msg("Using specified credentials file for Pub/Sub client")
-	} else {
-		ingestionLogger.Info().Msg("Using Application Default Credentials (ADC) for Pub/Sub client")
-	}
-
-	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID, opts...)
+	psClient, err = pubsub.NewClient(ctx, cfg.ProjectID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
 
-	publisherCfg := mqttconverter.GooglePubsubPublisherConfig{
-		ProjectID: cfg.ProjectID,
-		TopicID:   cfg.Publisher.TopicID,
-	}
-	publisher, err := mqttconverter.NewGooglePubsubPublisher(ctx, publisherCfg, ingestionLogger)
+	// 1. Create the producer from the generic messagepipeline package
+	producer, err := messagepipeline.NewGooglePubsubProducer[RawMessage](psClient, &cfg.Producer, ingestionLogger)
 	if err != nil {
-		psClient.Close()
-		return nil, fmt.Errorf("failed to create Google Pub/Sub publisher: %w", err)
+		return nil, fmt.Errorf("failed to create Google Pub/Sub producer: %w", err)
 	}
 
-	ingestionService := mqttconverter.NewIngestionService(
-		publisher,
-		extractor, // CORRECTED: Pass the provided extractor to the service.
+	// 2. Define the transformer to convert MQTT messages to our RawMessage format
+	transformer := func(msg mqttconverter.InMessage) (*RawMessage, bool, error) {
+		if msg.Duplicate {
+			return nil, true, nil // Skip duplicates
+		}
+		transformed := &RawMessage{
+			Topic:     msg.Topic,
+			Payload:   msg.Payload, // The payload is already raw bytes
+			Timestamp: msg.Timestamp.Format(time.RFC3339Nano),
+		}
+		return transformed, false, nil
+	}
+
+	// 3. Create the ingestion service, now passing the generic producer and transformer
+	ingestionService := mqttconverter.NewIngestionService[RawMessage](
+		producer,
+		transformer,
 		ingestionLogger,
 		cfg.Service,
 		cfg.MQTT,
@@ -102,12 +99,11 @@ func (s *IngestionServiceWrapper) Start() error {
 	return s.BaseServer.Start()
 }
 
-// Shutdown gracefully stops the MQTT ingestion service and the embedded HTTP server.
+// Shutdown gracefully stops the MQTT ingestion service.
 func (s *IngestionServiceWrapper) Shutdown() {
 	s.logger.Info().Msg("Shutting down MQTT ingestion server components...")
 	s.ingestionService.Stop()
 	s.logger.Info().Msg("Core ingestion service stopped.")
-
 	s.BaseServer.Shutdown()
 
 	if s.pubsubClient != nil {

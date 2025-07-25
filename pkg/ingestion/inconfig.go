@@ -68,10 +68,10 @@ func LoadConfig() (*Config, error) {
 
 	// 3. Override with environment variables if they are set.
 	// This creates a clear hierarchy: ENV > flag > default.
-	pkg.OverrideWithStringEnvVar("APP_PROJECT_ID", &cfg.ProjectID)
+	pkg.OverrideWithStringEnvVar("PROJECT_ID", &cfg.ProjectID)
+	pkg.OverrideWithStringEnvVar("SERVICE_DIRECTOR_URL", &cfg.ServiceDirectorURL)
 	pkg.OverrideWithStringEnvVar("APP_SERVICE_NAME", &cfg.ServiceName)
 	pkg.OverrideWithStringEnvVar("APP_DATAFLOW_NAME", &cfg.DataflowName)
-	pkg.OverrideWithStringEnvVar("APP_SERVICE_DIRECTOR_URL", &cfg.ServiceDirectorURL)
 	pkg.OverrideWithStringEnvVar("APP_PUBLISHER_TOPIC_ID", &cfg.Publisher.TopicID)
 	pkg.OverrideWithStringEnvVar("APP_MQTT_BROKER_URL", &cfg.MQTT.BrokerURL)
 	pkg.OverrideWithStringEnvVar("APP_MQTT_TOPIC", &cfg.MQTT.Topic)

@@ -79,10 +79,10 @@ func LoadConfig() (*Config, error) {
 	flag.Parse()
 
 	// 3. Override with environment variables if they are set. ENV > flag > default.
-	pkg.OverrideWithStringEnvVar("APP_PROJECT_ID", &cfg.ProjectID)
+	pkg.OverrideWithStringEnvVar("PROJECT_ID", &cfg.ProjectID)
+	pkg.OverrideWithStringEnvVar("SERVICE_DIRECTOR_URL", &cfg.ServiceDirectorURL)
 	pkg.OverrideWithStringEnvVar("APP_SERVICE_NAME", &cfg.ServiceName)
 	pkg.OverrideWithStringEnvVar("APP_DATAFLOW_NAME", &cfg.DataflowName)
-	pkg.OverrideWithStringEnvVar("APP_SERVICE_DIRECTOR_URL", &cfg.ServiceDirectorURL)
 	pkg.OverrideWithStringEnvVar("APP_CONSUMER_SUBSCRIPTION_ID", &cfg.Consumer.SubscriptionID)
 	pkg.OverrideWithStringEnvVar("APP_ICE_STORE_BUCKET_NAME", &cfg.IceStore.BucketName)
 	pkg.OverrideWithStringEnvVar("APP_ICE_STORE_OBJECT_PREFIX", &cfg.IceStore.ObjectPrefix)

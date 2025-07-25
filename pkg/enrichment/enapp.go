@@ -49,9 +49,11 @@ func NewPublishMessageEnrichmentServiceWrapper(
 	if cfg.ServiceDirectorURL != "" {
 		directorClient, err := servicedirector.NewClient(cfg.ServiceDirectorURL, enrichmentLogger)
 		if err != nil {
+			serviceCancel()
 			return nil, fmt.Errorf("failed to create service director client: %w", err)
 		}
 		if err := directorClient.VerifyDataflow(serviceCtx, cfg.DataflowName, cfg.ServiceName); err != nil {
+			serviceCancel()
 			return nil, fmt.Errorf("resource verification failed via Director: %w", err)
 		}
 		enrichmentLogger.Info().Msg("Resource verification successful.")
@@ -67,12 +69,14 @@ func NewPublishMessageEnrichmentServiceWrapper(
 
 	psClient, err := pubsub.NewClient(serviceCtx, cfg.ProjectID, opts...)
 	if err != nil {
+		serviceCancel()
 		return nil, fmt.Errorf("failed to create Pub/Sub client: %w", err)
 	}
 
 	fsClient, err := firestore.NewClient(serviceCtx, cfg.ProjectID, opts...)
 	if err != nil {
 		psClient.Close()
+		serviceCancel()
 		return nil, fmt.Errorf("failed to create Firestore client: %w", err)
 	}
 
@@ -86,6 +90,7 @@ func NewPublishMessageEnrichmentServiceWrapper(
 	if err != nil {
 		psClient.Close()
 		fsClient.Close()
+		serviceCancel()
 		return nil, fmt.Errorf("failed to create Pub/Sub consumer: %w", err)
 	}
 
@@ -93,6 +98,7 @@ func NewPublishMessageEnrichmentServiceWrapper(
 	if err != nil {
 		psClient.Close()
 		fsClient.Close()
+		serviceCancel()
 		return nil, fmt.Errorf("failed to create Firestore metadata fetcher: %w", err)
 	}
 
@@ -100,12 +106,14 @@ func NewPublishMessageEnrichmentServiceWrapper(
 	if err != nil {
 		psClient.Close()
 		fsClient.Close()
+		serviceCancel()
 		return nil, fmt.Errorf("failed to create redis cache layer: %w", err)
 	}
 	metadataFetcher, metadataCleanup, err := device.NewCacheFallbackFetcher(serviceCtx, redisCache, sourceFetcher, enrichmentLogger)
 	if err != nil {
 		psClient.Close()
 		fsClient.Close()
+		serviceCancel()
 		return nil, fmt.Errorf("failed to create chained metadata fetcher: %w", err)
 	}
 
@@ -144,6 +152,7 @@ func (s *EnrichmentServiceWrapper[T]) Start() error {
 
 // Shutdown gracefully stops the enrichment processing service and its clients.
 func (s *EnrichmentServiceWrapper[T]) Shutdown() {
+
 	s.logger.Info().Msg("Shutting down enrichment server components...")
 	s.serviceCancel()
 	s.processingService.Stop()

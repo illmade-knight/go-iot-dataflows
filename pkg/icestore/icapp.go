@@ -33,7 +33,7 @@ type IceStoreServiceWrapper struct {
 // Pub/Sub consumer, GCS batch processor, and the core processing service.
 func NewIceStoreServiceWrapper(cfg *Config, logger zerolog.Logger) (*IceStoreServiceWrapper, error) {
 	ctx := context.Background() // Use a context that can be managed by the main lifecycle
-	isLogger := logger.With().Str("component", "IceStoreService").Logger()
+	isLogger := logger.With().Str("component", "IceStore").Logger()
 
 	// Determine general GCP client options (credentials file or ADC).
 	var generalOpts []option.ClientOption

@@ -7,7 +7,7 @@ require (
 	cloud.google.com/go/firestore v1.18.0
 	cloud.google.com/go/pubsub v1.49.0
 	cloud.google.com/go/storage v1.55.0
-	github.com/illmade-knight/go-cloud-manager v0.0.10-prerelease
+	github.com/illmade-knight/go-cloud-manager v0.0.21-prerelease
 	github.com/illmade-knight/go-iot v0.0.18
 	github.com/rs/zerolog v1.34.0
 	google.golang.org/api v0.243.0
@@ -16,12 +16,16 @@ require (
 require (
 	cel.dev/expr v0.24.0 // indirect
 	cloud.google.com/go v0.121.1 // indirect
+	cloud.google.com/go/artifactregistry v1.17.1 // indirect
 	cloud.google.com/go/auth v0.16.3 // indirect
 	cloud.google.com/go/auth/oauth2adapt v0.2.8 // indirect
+	cloud.google.com/go/cloudbuild v1.22.2 // indirect
 	cloud.google.com/go/compute/metadata v0.7.0 // indirect
 	cloud.google.com/go/iam v1.5.2 // indirect
 	cloud.google.com/go/longrunning v0.6.7 // indirect
 	cloud.google.com/go/monitoring v1.24.2 // indirect
+	cloud.google.com/go/resourcemanager v1.10.6 // indirect
+	cloud.google.com/go/secretmanager v1.14.7 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.27.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.51.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.51.0 // indirect

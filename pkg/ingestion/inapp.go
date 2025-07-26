@@ -27,7 +27,6 @@ type RawMessage struct {
 type IngestionServiceWrapper struct {
 	*microservice.BaseServer
 	ingestionService *mqttconverter.IngestionService[RawMessage] // Now generic
-	pubsubClient     *pubsub.Client
 	logger           zerolog.Logger
 }
 
@@ -36,21 +35,16 @@ func NewIngestionServiceWrapper(
 	cfg *Config,
 	logger zerolog.Logger,
 ) (wrapper *IngestionServiceWrapper, err error) {
-	ctx := context.Background()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
 	ingestionLogger := logger.With().Str("component", "IngestionService").Logger()
 
-	var psClient *pubsub.Client
-	defer func() {
-		if err != nil && psClient != nil {
-			psClient.Close()
-		}
-	}()
-
-	psClient, err = pubsub.NewClient(ctx, cfg.ProjectID)
+	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID, cfg.PubsubOptions...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
+		return nil, err
 	}
-
 	// 1. Create the producer from the generic messagepipeline package
 	producer, err := messagepipeline.NewGooglePubsubProducer[RawMessage](psClient, &cfg.Producer, ingestionLogger)
 	if err != nil {
@@ -84,7 +78,6 @@ func NewIngestionServiceWrapper(
 	return &IngestionServiceWrapper{
 		BaseServer:       baseServer,
 		ingestionService: ingestionService,
-		pubsubClient:     psClient,
 		logger:           ingestionLogger,
 	}, nil
 }
@@ -105,11 +98,6 @@ func (s *IngestionServiceWrapper) Shutdown() {
 	s.ingestionService.Stop()
 	s.logger.Info().Msg("Core ingestion service stopped.")
 	s.BaseServer.Shutdown()
-
-	if s.pubsubClient != nil {
-		s.pubsubClient.Close()
-		s.logger.Info().Msg("Pub/Sub client closed.")
-	}
 }
 
 // Mux returns the HTTP ServeMux for the service.

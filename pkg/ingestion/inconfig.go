@@ -4,6 +4,7 @@ package ingestion
 import (
 	"flag"
 	"fmt"
+	"google.golang.org/api/option"
 	"os"
 
 	"github.com/illmade-knight/go-cloud-manager/microservice"
@@ -18,9 +19,11 @@ type Config struct {
 	ServiceName        string
 	DataflowName       string
 	ServiceDirectorURL string
-	MQTT               mqttconverter.MQTTClientConfig
-	Service            mqttconverter.IngestionServiceConfig
-	Producer           messagepipeline.GooglePubsubProducerConfig // UPDATED: Use the generic producer config
+	PubsubOptions      []option.ClientOption
+
+	MQTT     mqttconverter.MQTTClientConfig
+	Service  mqttconverter.IngestionServiceConfig
+	Producer messagepipeline.GooglePubsubProducerConfig // UPDATED: Use the generic producer config
 }
 
 // LoadConfig initializes and loads the updated configuration.

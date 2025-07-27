@@ -38,18 +38,12 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// Set defaults for all components
-	// we introduced a requirement for LoadGooglePubsubProducerConfig to supply a topic - but we also need to check we replace this...
-	producerTopic := "replace-topic-name"
-	producerCfg, err := messagepipeline.LoadGooglePubsubProducerConfig(producerTopic)
-	if err != nil {
-		return nil, err
-	}
+	// get the basic producer config
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
 	cfg.Producer = *producerCfg
 
-	mqttCfg, err := mqttconverter.LoadMQTTClientConfigFromEnv()
-	if err != nil {
-		return nil, err
-	}
+	// load basic mqtt parameters - leave the rest for flags and env here
+	mqttCfg := mqttconverter.LoadMQTTClientConfigFromEnv()
 	cfg.MQTT = *mqttCfg
 
 	cfg.Service = mqttconverter.DefaultIngestionServiceConfig()

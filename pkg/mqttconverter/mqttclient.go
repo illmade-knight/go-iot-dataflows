@@ -1,7 +1,7 @@
 package mqttconverter
 
 import (
-	"errors"
+	"github.com/rs/zerolog/log"
 	"os"
 	"time"
 )
@@ -23,49 +23,37 @@ type MQTTClientConfig struct {
 	InsecureSkipVerify bool          // Optional: Skip TLS verification (NOT recommended for production)
 }
 
-// LoadMQTTClientConfigFromEnv loads MQTT configuration from environment variables.
-func LoadMQTTClientConfigFromEnv() (*MQTTClientConfig, error) {
+// LoadMQTTClientConfigFromEnv loads MQTT operational configuration from environment variables.
+func LoadMQTTClientConfigFromEnv() *MQTTClientConfig {
 
 	cfg := &MQTTClientConfig{
-		BrokerURL:        os.Getenv("MQTT_BROKER_URL"),
-		Topic:            os.Getenv("MQTT_TOPIC"),
-		ClientIDPrefix:   os.Getenv("MQTT_CLIENT_ID_PREFIX"),
-		Username:         os.Getenv("MQTT_USERNAME"),
-		Password:         os.Getenv("MQTT_PASSWORD"),
 		KeepAlive:        60 * time.Second,  // Default
 		ConnectTimeout:   10 * time.Second,  // Default
 		ReconnectWaitMin: 1 * time.Second,   // Default
 		ReconnectWaitMax: 120 * time.Second, // Default
-		CACertFile:       os.Getenv("MQTT_CA_CERT_FILE"),
-		ClientCertFile:   os.Getenv("MQTT_CLIENT_CERT_FILE"),
-		ClientKeyFile:    os.Getenv("MQTT_CLIENT_KEY_FILE"),
+		ClientIDPrefix:   "ingestion-service-",
 	}
 	if skipVerify := os.Getenv("MQTT_INSECURE_SKIP_VERIFY"); skipVerify == "true" {
 		cfg.InsecureSkipVerify = true
 	}
 
-	if cfg.BrokerURL == "" {
-		return cfg, errors.New("MQTT_BROKER_URL environment variable not set")
-	}
-	if cfg.Topic == "" {
-		return cfg, errors.New("MQTT_TOPIC environment variable not set")
-	}
-	if cfg.ClientIDPrefix == "" {
-		cfg.ClientIDPrefix = "ingestion-service-" // Default prefix
-	}
-	// Username and Password can be empty for brokers that don't require auth.
-
 	// Parse durations if set in env, otherwise use defaults
 	if ka := os.Getenv("MQTT_KEEP_ALIVE_SECONDS"); ka != "" {
-		if s, err := time.ParseDuration(ka + "s"); err == nil {
+		s, err := time.ParseDuration(ka + "s")
+		if err == nil {
 			cfg.KeepAlive = s
+		} else {
+			log.Printf("mqttconverter: error parsing keepAlive seconds: %s, using default", err)
 		}
 	}
 	if ct := os.Getenv("MQTT_CONNECT_TIMEOUT_SECONDS"); ct != "" {
-		if s, err := time.ParseDuration(ct + "s"); err == nil {
+		s, err := time.ParseDuration(ct + "s")
+		if err == nil {
 			cfg.ConnectTimeout = s
+		} else {
+			log.Printf("mqttconverter: error parsing connect timeout seconds: %s, using default", err)
 		}
 	}
 
-	return cfg, nil
+	return cfg
 }

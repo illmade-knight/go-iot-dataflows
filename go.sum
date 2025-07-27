@@ -176,8 +176,8 @@ github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.1 h1:X5VWvz21y3gzm9Nw/kaUeku/1+u
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.1/go.mod h1:Zanoh4+gvIgluNqcfMVTJueD4wSS5hT7zTt4Mrutd90=
 github.com/illmade-knight/go-cloud-manager v0.0.24-beta h1:DBMEb2CNaxxcl5wNoyZsjVYwYjrQeQPtE0uSTka2KzQ=
 github.com/illmade-knight/go-cloud-manager v0.0.24-beta/go.mod h1:SFinCZypmdzNCUjJ23yNyGdG3Ltb+7R2z2M2wysWbVQ=
-github.com/illmade-knight/go-dataflow v0.0.4-beta h1:9FzLYQES/QIB83I6JNcLGGRSuNxIARW36a9iy33bnTU=
-github.com/illmade-knight/go-dataflow v0.0.4-beta/go.mod h1:EGDmnBAArFw8H2F662heD4QwYmeiUBLck+/avsMTHyc=
+github.com/illmade-knight/go-dataflow v0.0.6-beta h1:osrnS1hm9zlLYDFFmdHzk3JNpl5Mc4Ad/2qjs4oL91U=
+github.com/illmade-knight/go-dataflow v0.0.6-beta/go.mod h1:EGDmnBAArFw8H2F662heD4QwYmeiUBLck+/avsMTHyc=
 github.com/illmade-knight/go-test v0.0.2-beta h1:b7LKySBc2v93kU4JhSv4FzDdVAO0UD/2YyFtCv/LKco=
 github.com/illmade-knight/go-test v0.0.2-beta/go.mod h1:7xqTQamAwyaUSoWSfv4NwSRmcnkMUAtOz1XqngjeJTY=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=

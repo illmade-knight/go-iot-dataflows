@@ -10,7 +10,7 @@ require (
 	github.com/eclipse/paho.mqtt.golang v1.5.0
 	github.com/google/uuid v1.6.0
 	github.com/illmade-knight/go-cloud-manager v0.0.24-beta
-	github.com/illmade-knight/go-dataflow v0.0.3-beta
+	github.com/illmade-knight/go-dataflow v0.0.4-beta
 	github.com/illmade-knight/go-test v0.0.2-beta
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.10.0

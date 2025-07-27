@@ -36,12 +36,23 @@ func NewIngestionServiceWrapper(
 	logger zerolog.Logger,
 ) (wrapper *IngestionServiceWrapper, err error) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
+	serviceContext, serviceCancel := context.WithCancel(context.Background())
+	defer serviceCancel()
 
 	ingestionLogger := logger.With().Str("component", "IngestionService").Logger()
 
-	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID, cfg.PubsubOptions...)
+	var psClient *pubsub.Client
+
+	defer func() {
+		if err != nil {
+			if psClient != nil {
+				psClient.Close()
+			}
+			serviceCancel()
+		}
+	}()
+
+	psClient, err = pubsub.NewClient(serviceContext, cfg.ProjectID, cfg.PubsubOptions...)
 	if err != nil {
 		return nil, err
 	}

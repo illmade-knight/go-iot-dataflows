@@ -39,7 +39,9 @@ func LoadConfig() (*Config, error) {
 	}
 
 	// Set defaults for all components
-	producerCfg, _ := messagepipeline.LoadGooglePubsubProducerConfigFromEnv()
+	// we introduced a requirement for LoadGooglePubsubProducerConfig to supply a topic - but we also need to check we replace this...
+	producerTopic := "replace-topic-name"
+	producerCfg, _ := messagepipeline.LoadGooglePubsubProducerConfig(producerTopic)
 	cfg.Producer = *producerCfg
 
 	mqttCfg, _ := mqttconverter.LoadMQTTClientConfigFromEnv()
@@ -61,6 +63,10 @@ func LoadConfig() (*Config, error) {
 	pkg.OverrideWithStringEnvVar("APP_PRODUCER_TOPIC_ID", &cfg.Producer.TopicID)
 	pkg.OverrideWithStringEnvVar("APP_MQTT_BROKER_URL", &cfg.MQTT.BrokerURL)
 	pkg.OverrideWithStringEnvVar("APP_MQTT_TOPIC", &cfg.MQTT.Topic)
+
+	if cfg.Producer.TopicID == "replace-topic-name" {
+		return nil, fmt.Errorf("variable APP_PRODUCER_TOPIC_ID must be set not default")
+	}
 
 	if port := os.Getenv("PORT"); port != "" {
 		cfg.HTTPPort = ":" + port

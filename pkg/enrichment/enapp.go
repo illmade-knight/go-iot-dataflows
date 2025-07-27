@@ -6,13 +6,13 @@ import (
 	"cloud.google.com/go/pubsub"
 	"context"
 	"fmt"
-	"net/http"
-
 	"github.com/illmade-knight/go-cloud-manager/microservice"
+	"github.com/illmade-knight/go-cloud-manager/microservice/servicedirector"
 	"github.com/illmade-knight/go-dataflow/pkg/cache"
 	"github.com/illmade-knight/go-dataflow/pkg/enrichment"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-dataflow/pkg/types"
+	"net/http"
 
 	"github.com/rs/zerolog"
 	"google.golang.org/api/option"
@@ -42,11 +42,11 @@ func NewPublishMessageEnrichmentServiceWrapper(
 	cfg *Config,
 	parentContext context.Context,
 	logger zerolog.Logger,
-) (*EnrichmentServiceWrapper, error) {
+) (serviceWrapper *EnrichmentServiceWrapper, err error) {
 	serviceCtx, serviceCancel := context.WithCancel(parentContext)
+
 	var psClient *pubsub.Client
 	var fsClient *firestore.Client
-	var err error
 
 	defer func() {
 		if err != nil {
@@ -78,19 +78,18 @@ func NewPublishMessageEnrichmentServiceWrapper(
 		return nil, fmt.Errorf("failed to create Firestore client: %w", err)
 	}
 
-	return NewPublishMessageEnrichmentServiceWrapperWithClients(cfg, parentContext, logger, psClient, fsClient)
+	return NewPublishMessageEnrichmentServiceWrapperWithClients(cfg, logger, psClient, fsClient)
 }
 
 // NewPublishMessageEnrichmentServiceWrapperWithClients creates the service with injected clients for testability.
 func NewPublishMessageEnrichmentServiceWrapperWithClients(
 	cfg *Config,
-	parentContext context.Context,
 	logger zerolog.Logger,
 	psClient *pubsub.Client,
 	fsClient *firestore.Client,
 ) (wrapper *EnrichmentServiceWrapper, err error) {
 	enrichmentLogger := logger.With().Str("component", "EnrichmentService").Logger()
-	serviceCtx, serviceCancel := context.WithCancel(parentContext)
+	serviceCtx, serviceCancel := context.WithCancel(context.Background())
 
 	defer func() {
 		if err != nil {
@@ -99,7 +98,17 @@ func NewPublishMessageEnrichmentServiceWrapperWithClients(
 	}()
 
 	if cfg.ServiceDirectorURL != "" {
-		// Director verification logic...
+		var directorClient *servicedirector.Client
+		directorClient, err = servicedirector.NewClient(cfg.ServiceDirectorURL, enrichmentLogger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create service director client: %w", err)
+		}
+		if err = directorClient.VerifyDataflow(serviceCtx, cfg.DataflowName, cfg.ServiceName); err != nil {
+			return nil, fmt.Errorf("resource verification failed via Director: %w", err)
+		}
+		enrichmentLogger.Info().Msg("Resource verification successful.")
+	} else {
+		enrichmentLogger.Warn().Msg("ServiceDirectorURL not set, skipping resource verification.")
 	}
 
 	sourceFetcher, err := cache.NewFirestoreSource[string, DeviceMetadata](fsClient, cfg.CacheConfig.FirestoreConfig, enrichmentLogger)
@@ -118,7 +127,10 @@ func NewPublishMessageEnrichmentServiceWrapperWithClients(
 	}
 	defer func() {
 		if err != nil && fetcherCleanup != nil {
-			fetcherCleanup()
+			err = fetcherCleanup()
+			if err != nil {
+				enrichmentLogger.Warn().Err(err).Msg("failed to cleanup fetcher")
+			}
 		}
 	}()
 

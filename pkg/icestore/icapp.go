@@ -6,12 +6,11 @@ import (
 	"cloud.google.com/go/storage"
 	"context"
 	"fmt"
-	"os"
-	"strings"
-
 	"github.com/illmade-knight/go-cloud-manager/microservice"
 	"github.com/illmade-knight/go-dataflow/pkg/icestore"        // Existing icestore package from go-iot
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline" // For MetricReporter
+	"os"
+	"strings"
 
 	"github.com/rs/zerolog"
 	"google.golang.org/api/option"
@@ -34,7 +33,7 @@ func NewIceStoreServiceWrapper(
 	cfg *Config,
 	logger zerolog.Logger,
 ) (wrapper *IceStoreServiceWrapper, err error) { // 1. Named error return
-	ctx := context.Background()
+	serviceCtx, serviceCancel := context.WithCancel(context.Background())
 	isLogger := logger.With().Str("component", "IceStore").Logger()
 
 	// --- Client variables to be cleaned up by defer on failure ---
@@ -51,6 +50,7 @@ func NewIceStoreServiceWrapper(
 			if psClient != nil {
 				psClient.Close()
 			}
+			serviceCancel()
 		}
 	}()
 
@@ -68,7 +68,7 @@ func NewIceStoreServiceWrapper(
 		gcsOpts = append(gcsOpts, option.WithoutAuthentication(), option.WithEndpoint(emulatorHost))
 	}
 
-	gcsClient, err = storage.NewClient(ctx, gcsOpts...)
+	gcsClient, err = storage.NewClient(serviceCtx, gcsOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GCS client: %w", err)
 	}
@@ -78,7 +78,7 @@ func NewIceStoreServiceWrapper(
 		psOpts = []option.ClientOption{option.WithCredentialsFile(cfg.Consumer.CredentialsFile)}
 	}
 
-	psClient, err = pubsub.NewClient(ctx, cfg.ProjectID, psOpts...)
+	psClient, err = pubsub.NewClient(serviceCtx, cfg.ProjectID, psOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}

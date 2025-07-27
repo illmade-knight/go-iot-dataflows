@@ -6,12 +6,11 @@ import (
 	"cloud.google.com/go/pubsub"
 	"context"
 	"fmt"
-	"net/http"
-
 	"github.com/illmade-knight/go-cloud-manager/microservice"
 	"github.com/illmade-knight/go-cloud-manager/microservice/servicedirector"
 	"github.com/illmade-knight/go-dataflow/pkg/bqstore"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
+	"net/http"
 
 	"github.com/rs/zerolog"
 	"google.golang.org/api/option"
@@ -34,7 +33,7 @@ func NewBQServiceWrapper[T any](
 	transformer messagepipeline.MessageTransformer[T],
 ) (wrapper *BQServiceWrapper[T], err error) { // 1. Named error return
 
-	ctx := context.Background()
+	serviceCtx, serviceCancel := context.WithCancel(context.Background())
 	bqLogger := logger.With().Str("component", "BQService").Logger()
 
 	// --- Client variables to be cleaned up by defer on failure ---
@@ -51,6 +50,7 @@ func NewBQServiceWrapper[T any](
 			if psClient != nil {
 				psClient.Close()
 			}
+			serviceCancel()
 		}
 	}()
 
@@ -60,7 +60,7 @@ func NewBQServiceWrapper[T any](
 		if err != nil {
 			return nil, fmt.Errorf("failed to create service director client: %w", err)
 		}
-		if err = directorClient.VerifyDataflow(ctx, cfg.DataflowName, cfg.ServiceName); err != nil {
+		if err = directorClient.VerifyDataflow(serviceCtx, cfg.DataflowName, cfg.ServiceName); err != nil {
 			return nil, fmt.Errorf("resource verification failed via Director: %w", err)
 		}
 		bqLogger.Info().Msg("Resource verification successful.")
@@ -74,12 +74,12 @@ func NewBQServiceWrapper[T any](
 	}
 
 	// 3. Simplified sequential resource creation.
-	bqClient, err = bigquery.NewClient(ctx, cfg.ProjectID, opts...)
+	bqClient, err = bigquery.NewClient(serviceCtx, cfg.ProjectID, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create BigQuery client: %w", err)
 	}
 
-	psClient, err = pubsub.NewClient(ctx, cfg.ProjectID, opts...)
+	psClient, err = pubsub.NewClient(serviceCtx, cfg.ProjectID, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
@@ -98,7 +98,7 @@ func NewBQServiceWrapper[T any](
 		DatasetID: cfg.BigQueryConfig.DatasetID,
 		TableID:   cfg.BigQueryConfig.TableID,
 	}
-	bigQueryInserter, err := bqstore.NewBigQueryInserter[T](ctx, bqClient, bqInserterCfg, logger)
+	bigQueryInserter, err := bqstore.NewBigQueryInserter[T](serviceCtx, bqClient, bqInserterCfg, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create BigQuery inserter: %w", err)
 	}

@@ -29,10 +29,11 @@ type IceStoreServiceWrapper struct {
 
 // NewIceStoreServiceWrapper creates and configures a new IceStoreServiceWrapper instance.
 func NewIceStoreServiceWrapper(
+	ctx context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
 ) (wrapper *IceStoreServiceWrapper, err error) { // 1. Named error return
-	serviceCtx, serviceCancel := context.WithCancel(context.Background())
+	serviceCtx, serviceCancel := context.WithCancel(ctx)
 	isLogger := logger.With().Str("component", "IceStore").Logger()
 
 	// --- Client variables to be cleaned up by defer on failure ---
@@ -86,7 +87,7 @@ func NewIceStoreServiceWrapper(
 		ProjectID:      cfg.ProjectID,
 		SubscriptionID: cfg.Consumer.SubscriptionID,
 	}
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, logger)
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(serviceCtx, consumerCfg, psClient, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Pub/Sub consumer: %w", err)
 	}

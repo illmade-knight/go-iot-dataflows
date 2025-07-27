@@ -39,11 +39,12 @@ type EnrichmentServiceWrapper struct {
 // NewPublishMessageEnrichmentServiceWrapper creates and configures a new EnrichmentServiceWrapper.
 // NewPublishMessageEnrichmentServiceWrapper creates the service for production, creating its own clients.
 func NewPublishMessageEnrichmentServiceWrapper(
-	cfg *Config,
+	ctx context.Context,
 	parentContext context.Context,
+	cfg *Config,
 	logger zerolog.Logger,
 ) (serviceWrapper *EnrichmentServiceWrapper, err error) {
-	serviceCtx, serviceCancel := context.WithCancel(parentContext)
+	serviceCtx, serviceCancel := context.WithCancel(ctx)
 
 	var psClient *pubsub.Client
 	var fsClient *firestore.Client
@@ -78,18 +79,19 @@ func NewPublishMessageEnrichmentServiceWrapper(
 		return nil, fmt.Errorf("failed to create Firestore client: %w", err)
 	}
 
-	return NewPublishMessageEnrichmentServiceWrapperWithClients(cfg, logger, psClient, fsClient)
+	return NewPublishMessageEnrichmentServiceWrapperWithClients(ctx, cfg, logger, psClient, fsClient)
 }
 
 // NewPublishMessageEnrichmentServiceWrapperWithClients creates the service with injected clients for testability.
 func NewPublishMessageEnrichmentServiceWrapperWithClients(
+	ctx context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
 	psClient *pubsub.Client,
 	fsClient *firestore.Client,
 ) (wrapper *EnrichmentServiceWrapper, err error) {
 	enrichmentLogger := logger.With().Str("component", "EnrichmentService").Logger()
-	serviceCtx, serviceCancel := context.WithCancel(context.Background())
+	serviceCtx, serviceCancel := context.WithCancel(ctx)
 
 	defer func() {
 		if err != nil {
@@ -154,12 +156,12 @@ func NewPublishMessageEnrichmentServiceWrapperWithClients(
 		ProjectID:      cfg.ProjectID,
 		SubscriptionID: cfg.Consumer.SubscriptionID,
 	}
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, enrichmentLogger)
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(serviceCtx, consumerCfg, psClient, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create consumer: %w", err)
 	}
 
-	mainProducer, err := messagepipeline.NewGooglePubsubProducer[types.PublishMessage](psClient, cfg.ProducerConfig, enrichmentLogger)
+	mainProducer, err := messagepipeline.NewGooglePubsubProducer[types.PublishMessage](serviceCtx, psClient, cfg.ProducerConfig, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create producer: %w", err)
 	}

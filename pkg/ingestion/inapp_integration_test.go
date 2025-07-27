@@ -22,7 +22,7 @@ import (
 )
 
 func TestIngestionServiceWrapper_Integration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	testContext, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// --- 1. Setup Emulators and Logger ---
@@ -30,8 +30,8 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 		Level(zerolog.DebugLevel).
 		With().Timestamp().Logger()
 
-	mqttConnection := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
-	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, emulators.GetDefaultPubsubConfig("test-project", map[string]string{"ingestion-output-topic": "ingestion-verifier-sub"}))
+	mqttConnection := emulators.SetupMosquittoContainer(t, testContext, emulators.GetDefaultMqttImageContainer())
+	pubsubConnection := emulators.SetupPubsubEmulator(t, testContext, emulators.GetDefaultPubsubConfig("test-project", map[string]string{"ingestion-output-topic": "ingestion-verifier-sub"}))
 
 	// --- 2. Configure the Ingestion Service Wrapper ---
 	// This configures the application exactly as it would run, but points it to our emulators.
@@ -53,7 +53,7 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	}
 
 	// --- 3. Create and Start the Service Wrapper ---
-	serviceWrapper, err := NewIngestionServiceWrapper(cfg, logger)
+	serviceWrapper, err := NewIngestionServiceWrapper(testContext, cfg, logger)
 	require.NoError(t, err)
 
 	go func() {
@@ -71,7 +71,7 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	require.NoError(t, err)
 	defer mqttTestPubClient.Disconnect(250)
 
-	subClient, err := pubsub.NewClient(ctx, "test-project", pubsubConnection.ClientOptions...)
+	subClient, err := pubsub.NewClient(testContext, "test-project", pubsubConnection.ClientOptions...)
 	require.NoError(t, err)
 	defer func(subClient *pubsub.Client) {
 		_ = subClient.Close()
@@ -94,7 +94,7 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 		logger.Info().Str("topic", publishTopic).Msg("Test message published to MQTT broker")
 
 		// --- Verification ---
-		pullCtx, pullCancel := context.WithTimeout(ctx, 30*time.Second)
+		pullCtx, pullCancel := context.WithTimeout(testContext, 30*time.Second)
 		defer pullCancel()
 
 		var receivedMsg *pubsub.Message

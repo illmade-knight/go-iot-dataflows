@@ -61,7 +61,7 @@ func receiveSingleMessage(t *testing.T, ctx context.Context, sub *pubsub.Subscri
 }
 
 func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	testContext, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).
@@ -70,9 +70,9 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 
 	// --- 1. Setup Emulators ---
 	rc := emulators.GetDefaultRedisImageContainer()
-	redisConn := emulators.SetupRedisContainer(t, ctx, rc)
+	redisConn := emulators.SetupRedisContainer(t, testContext, rc)
 	fc := emulators.GetDefaultFirestoreConfig(projectID)
-	firestoreConn := emulators.SetupFirestoreEmulator(t, ctx, fc)
+	firestoreConn := emulators.SetupFirestoreEmulator(t, testContext, fc)
 
 	runID := uuid.New().String()[:8]
 	inputTopicID := fmt.Sprintf("raw-device-messages-%s", runID)
@@ -80,10 +80,10 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	outputTopicID := fmt.Sprintf("enriched-device-messages-%s", runID)
 	deadLetterTopicID := fmt.Sprintf("enrichment-app-dlt-%s", runID)
 
-	pubsubConn := emulators.SetupPubsubEmulator(t, ctx, emulators.GetDefaultPubsubConfig(projectID, nil))
+	pubsubConn := emulators.SetupPubsubEmulator(t, testContext, emulators.GetDefaultPubsubConfig(projectID, nil))
 
 	// --- 2. Seed Firestore with Test Data ---
-	fsClient, err := firestore.NewClient(ctx, projectID, firestoreConn.ClientOptions...)
+	fsClient, err := firestore.NewClient(testContext, projectID, firestoreConn.ClientOptions...)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = fsClient.Close()
@@ -95,7 +95,7 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 		LocationID: "location-123",
 		Category:   "sensor",
 	}
-	_, err = fsClient.Collection("devices").Doc(testDeviceID).Set(ctx, testDeviceData)
+	_, err = fsClient.Collection("devices").Doc(testDeviceID).Set(testContext, testDeviceData)
 	require.NoError(t, err)
 
 	// --- 3. Configure the Service Wrapper ---
@@ -123,43 +123,43 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	}
 
 	// --- 5. Setup Test Pub/Sub Client for Publishing/Verifying ---
-	psClient, err := pubsub.NewClient(ctx, projectID, pubsubConn.ClientOptions...)
+	psClient, err := pubsub.NewClient(testContext, projectID, pubsubConn.ClientOptions...)
 	t.Cleanup(func() {
 		_ = psClient.Close()
 	})
 
-	inputTopic, err := psClient.CreateTopic(ctx, inputTopicID)
+	inputTopic, err := psClient.CreateTopic(testContext, inputTopicID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		err = inputTopic.Delete(ctx)
+		err = inputTopic.Delete(testContext)
 		if err != nil {
 			t.Logf("Error deleting topic: %v", err)
 		}
 	})
 
-	inputSub, err := psClient.CreateSubscription(ctx, inputSubID, pubsub.SubscriptionConfig{
+	inputSub, err := psClient.CreateSubscription(testContext, inputSubID, pubsub.SubscriptionConfig{
 		Topic: inputTopic,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		err = inputSub.Delete(ctx)
+		err = inputSub.Delete(testContext)
 		if err != nil {
 			t.Logf("Error deleting subscription: %v", err)
 		}
 	})
 
-	outputTopic, err := psClient.CreateTopic(ctx, outputTopicID)
+	outputTopic, err := psClient.CreateTopic(testContext, outputTopicID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		err = outputTopic.Delete(ctx)
+		err = outputTopic.Delete(testContext)
 		if err != nil {
 			t.Logf("Error deleting topic: %v", err)
 		}
 	})
-	deadLetterTopic, err := psClient.CreateTopic(ctx, deadLetterTopicID)
+	deadLetterTopic, err := psClient.CreateTopic(testContext, deadLetterTopicID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		err = deadLetterTopic.Delete(ctx)
+		err = deadLetterTopic.Delete(testContext)
 		if err != nil {
 			t.Logf("Error deleting topic: %v", err)
 		}
@@ -167,7 +167,7 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 
 	// --- 4. Create and Start the Service Wrapper ---
 	// Note: The wrapper creates its own internal Pub/Sub and Firestore clients.
-	wrapper, err := NewPublishMessageEnrichmentServiceWrapperWithClients(cfg, logger, psClient, fsClient)
+	wrapper, err := NewPublishMessageEnrichmentServiceWrapperWithClients(testContext, cfg, logger, psClient, fsClient)
 	require.NoError(t, err)
 
 	go func() {
@@ -180,10 +180,10 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	// --- 6. Run Test Cases ---
 	t.Run("Successful Enrichment", func(t *testing.T) {
 		// Create a temporary subscription to the output topic to verify the result
-		verifierSub, err := psClient.CreateSubscription(ctx, "verifier-sub-ok", pubsub.SubscriptionConfig{Topic: outputTopic})
+		verifierSub, err := psClient.CreateSubscription(testContext, "verifier-sub-ok", pubsub.SubscriptionConfig{Topic: outputTopic})
 		require.NoError(t, err)
 		t.Cleanup(func() {
-			err = verifierSub.Delete(ctx)
+			err = verifierSub.Delete(testContext)
 			if err != nil {
 				t.Logf("Error deleting subscription: %v", err)
 			}
@@ -191,15 +191,15 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 
 		// Publish a message that should be successfully enriched
 		originalPayload := `{"value": 42}`
-		res := inputTopic.Publish(ctx, &pubsub.Message{
+		res := inputTopic.Publish(testContext, &pubsub.Message{
 			Data:       []byte(originalPayload),
 			Attributes: map[string]string{"uid": testDeviceID},
 		})
-		_, err = res.Get(ctx)
+		_, err = res.Get(testContext)
 		require.NoError(t, err)
 
 		// Wait for the enriched message on the output topic
-		receivedMsg := receiveSingleMessage(t, ctx, verifierSub, 15*time.Second)
+		receivedMsg := receiveSingleMessage(t, testContext, verifierSub, 15*time.Second)
 		require.NotNil(t, receivedMsg, "Did not receive an enriched message on the output topic")
 
 		// Assert the content of the enriched message

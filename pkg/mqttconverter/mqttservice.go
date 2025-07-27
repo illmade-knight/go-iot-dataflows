@@ -57,6 +57,7 @@ type IngestionService[T any] struct {
 
 // NewIngestionService creates and initializes a new generic IngestionService.
 func NewIngestionService[T any](
+	ctx context.Context,
 	processor messagepipeline.MessageProcessor[T],
 	transformer func(InMessage) (*T, bool, error),
 	logger zerolog.Logger,
@@ -81,7 +82,7 @@ func NewIngestionService[T any](
 		serviceCfg.InputChanCapacity = defaultCfg.InputChanCapacity
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	serviceContext, cancel := context.WithCancel(ctx)
 	return &IngestionService[T]{
 		config:           serviceCfg,
 		mqttClientConfig: mqttCfg,
@@ -90,7 +91,7 @@ func NewIngestionService[T any](
 		transformer: transformer,
 		// --- MINIMAL CHANGES END HERE ---
 		logger:       logger,
-		cancelCtx:    ctx,
+		cancelCtx:    serviceContext,
 		cancelFunc:   cancel,
 		MessagesChan: make(chan InMessage, serviceCfg.InputChanCapacity),
 		ErrorChan:    make(chan error, serviceCfg.InputChanCapacity),

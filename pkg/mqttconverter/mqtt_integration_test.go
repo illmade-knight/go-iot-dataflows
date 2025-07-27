@@ -26,7 +26,7 @@ type RawMessage struct {
 }
 
 func TestIngestionService_Integration(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	testContext, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
 	// --- 1. Setup Emulators and a real logger ---
@@ -35,14 +35,14 @@ func TestIngestionService_Integration(t *testing.T) {
 		Level(zerolog.DebugLevel).
 		With().Timestamp().Logger()
 
-	mqttConnection := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
-	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, emulators.GetDefaultPubsubConfig("test-project", map[string]string{"processed-topic": "processed-sub"}))
+	mqttConnection := emulators.SetupMosquittoContainer(t, testContext, emulators.GetDefaultMqttImageContainer())
+	pubsubConnection := emulators.SetupPubsubEmulator(t, testContext, emulators.GetDefaultPubsubConfig("test-project", map[string]string{"processed-topic": "processed-sub"}))
 
 	// --- 2. Manually Construct Service Components ---
 	// This approach gives us direct control and visibility, unlike the application wrapper.
 
 	// Create a shared Pub/Sub client pointing to the emulator
-	psClient, err := pubsub.NewClient(ctx, "test-project", pubsubConnection.ClientOptions...)
+	psClient, err := pubsub.NewClient(testContext, "test-project", pubsubConnection.ClientOptions...)
 	require.NoError(t, err)
 	defer func(psClient *pubsub.Client) {
 		_ = psClient.Close()
@@ -63,7 +63,7 @@ func TestIngestionService_Integration(t *testing.T) {
 	serviceCfg := DefaultIngestionServiceConfig()
 
 	// Manually create the producer
-	producer, err := messagepipeline.NewGooglePubsubProducer[RawMessage](psClient, producerCfg, logger)
+	producer, err := messagepipeline.NewGooglePubsubProducer[RawMessage](testContext, psClient, producerCfg, logger)
 	require.NoError(t, err)
 
 	// Define the transformer function
@@ -80,7 +80,7 @@ func TestIngestionService_Integration(t *testing.T) {
 	}
 
 	// Manually create the IngestionService instance
-	service := NewIngestionService[RawMessage](producer, transformer, logger, serviceCfg, mqttCfg)
+	service := NewIngestionService[RawMessage](testContext, producer, transformer, logger, serviceCfg, mqttCfg)
 
 	// --- 3. Start the Service and Test Clients ---
 	err = service.Start()
@@ -109,7 +109,7 @@ func TestIngestionService_Integration(t *testing.T) {
 		logger.Info().Str("topic", publishTopic).Msg("Test message published to MQTT")
 
 		// --- Verification ---
-		pullCtx, pullCancel := context.WithTimeout(ctx, 30*time.Second)
+		pullCtx, pullCancel := context.WithTimeout(testContext, 30*time.Second)
 		defer pullCancel()
 
 		var receivedMsg *pubsub.Message

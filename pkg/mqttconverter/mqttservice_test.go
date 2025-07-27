@@ -73,11 +73,13 @@ func setupTestService[T any](
 ) (*IngestionService[T], *MockProcessor[T]) {
 	t.Helper()
 
+	testContext := context.Background()
+
 	cfg := DefaultIngestionServiceConfig()
 	logger := zerolog.Nop()
 	processor := NewMockProcessor[T](cfg.InputChanCapacity)
 
-	service := NewIngestionService[T](processor, transformer, logger, cfg, MQTTClientConfig{})
+	service := NewIngestionService[T](testContext, processor, transformer, logger, cfg, MQTTClientConfig{})
 	require.NotNil(t, service, "NewIngestionService should not return nil")
 
 	return service, processor

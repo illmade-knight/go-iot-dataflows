@@ -31,11 +31,12 @@ type IngestionServiceWrapper struct {
 
 // NewIngestionServiceWrapper creates and configures the full ingestion service.
 func NewIngestionServiceWrapper(
+	ctx context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
 ) (wrapper *IngestionServiceWrapper, err error) {
 
-	serviceContext, serviceCancel := context.WithCancel(context.Background())
+	serviceContext, serviceCancel := context.WithCancel(ctx)
 	defer serviceCancel()
 
 	ingestionLogger := logger.With().Str("component", "IngestionService").Logger()
@@ -56,7 +57,7 @@ func NewIngestionServiceWrapper(
 		return nil, err
 	}
 	// 1. Create the producer from the generic messagepipeline package
-	producer, err := messagepipeline.NewGooglePubsubProducer[RawMessage](psClient, &cfg.Producer, ingestionLogger)
+	producer, err := messagepipeline.NewGooglePubsubProducer[RawMessage](ctx, psClient, &cfg.Producer, ingestionLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Google Pub/Sub producer: %w", err)
 	}
@@ -76,6 +77,7 @@ func NewIngestionServiceWrapper(
 
 	// 3. Create the ingestion service, now passing the generic producer and transformer
 	ingestionService := mqttconverter.NewIngestionService[RawMessage](
+		serviceContext,
 		producer,
 		transformer,
 		ingestionLogger,

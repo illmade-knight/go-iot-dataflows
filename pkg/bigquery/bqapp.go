@@ -11,6 +11,7 @@ import (
 	"github.com/illmade-knight/go-dataflow/pkg/bqstore"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"net/http"
+	"time"
 
 	"github.com/rs/zerolog"
 	"google.golang.org/api/option"
@@ -28,12 +29,13 @@ type BQServiceWrapper[T any] struct {
 
 // NewBQServiceWrapper creates and configures a new generic BQServiceWrapper instance.
 func NewBQServiceWrapper[T any](
+	ctx context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
 	transformer messagepipeline.MessageTransformer[T],
 ) (wrapper *BQServiceWrapper[T], err error) { // 1. Named error return
 
-	serviceCtx, serviceCancel := context.WithCancel(context.Background())
+	serviceCtx, serviceCancel := context.WithTimeout(ctx, time.Second*30)
 	bqLogger := logger.With().Str("component", "BQService").Logger()
 
 	// --- Client variables to be cleaned up by defer on failure ---
@@ -88,7 +90,7 @@ func NewBQServiceWrapper[T any](
 		ProjectID:      cfg.ProjectID,
 		SubscriptionID: cfg.Consumer.SubscriptionID,
 	}
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(consumerCfg, psClient, logger)
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(serviceCtx, consumerCfg, psClient, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Pub/Sub consumer: %w", err)
 	}

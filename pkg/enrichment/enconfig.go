@@ -2,6 +2,7 @@ package enrichment
 
 import (
 	"flag"
+	"google.golang.org/api/option"
 	"os"
 	"time"
 
@@ -39,6 +40,8 @@ type Config struct {
 	ProducerConfig  *messagepipeline.GooglePubsubProducerConfig
 	CacheConfig     CacheConfig
 	ProcessorConfig ProcessorConfig
+
+	ClientConnections map[string][]option.ClientOption
 }
 
 // LoadConfig initializes and loads configuration using a clear hierarchy:

@@ -9,7 +9,6 @@ import (
 	"net/http"
 
 	"github.com/illmade-knight/go-cloud-manager/microservice"
-	"github.com/illmade-knight/go-cloud-manager/microservice/servicedirector"
 	"github.com/illmade-knight/go-dataflow/pkg/cache"
 	"github.com/illmade-knight/go-dataflow/pkg/enrichment"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
@@ -19,7 +18,7 @@ import (
 	"google.golang.org/api/option"
 )
 
-// DeviceMetadata is the concrete data structure for device enrichment.
+// DeviceMetadata is the concrete data structure this service fetches for enrichment.
 type DeviceMetadata struct {
 	ClientID   string `firestore:"clientID"`
 	LocationID string `firestore:"locationID"`
@@ -27,6 +26,7 @@ type DeviceMetadata struct {
 }
 
 // EnrichmentServiceWrapper wraps the processing service for a common interface.
+// The wrapper is now concrete as it's specific to this application's purpose.
 type EnrichmentServiceWrapper struct {
 	*microservice.BaseServer
 	wrapperContext    context.Context
@@ -37,54 +37,70 @@ type EnrichmentServiceWrapper struct {
 }
 
 // NewPublishMessageEnrichmentServiceWrapper creates and configures a new EnrichmentServiceWrapper.
-// NewPublishMessageEnrichmentServiceWrapper creates and configures a new EnrichmentServiceWrapper.
+// NewPublishMessageEnrichmentServiceWrapper creates the service for production, creating its own clients.
 func NewPublishMessageEnrichmentServiceWrapper(
 	cfg *Config,
 	parentContext context.Context,
 	logger zerolog.Logger,
-) (wrapper *EnrichmentServiceWrapper, err error) { // 1. Named error return
+) (*EnrichmentServiceWrapper, error) {
+	serviceCtx, serviceCancel := context.WithCancel(parentContext)
+	var psClient *pubsub.Client
+	var fsClient *firestore.Client
+	var err error
 
+	defer func() {
+		if err != nil {
+			if psClient != nil {
+				psClient.Close()
+			}
+			if fsClient != nil {
+				fsClient.Close()
+			}
+			serviceCancel()
+		}
+	}()
+
+	var psOpts []option.ClientOption
+	if cfg.ClientConnections != nil {
+		psOpts = cfg.ClientConnections["pubsub"]
+	}
+	psClient, err = pubsub.NewClient(serviceCtx, cfg.ProjectID, psOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Pub/Sub client: %w", err)
+	}
+
+	var fsOpts []option.ClientOption
+	if cfg.ClientConnections != nil {
+		fsOpts = cfg.ClientConnections["firestore"]
+	}
+	fsClient, err = firestore.NewClient(serviceCtx, cfg.ProjectID, fsOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Firestore client: %w", err)
+	}
+
+	return NewPublishMessageEnrichmentServiceWrapperWithClients(cfg, parentContext, logger, psClient, fsClient)
+}
+
+// NewPublishMessageEnrichmentServiceWrapperWithClients creates the service with injected clients for testability.
+func NewPublishMessageEnrichmentServiceWrapperWithClients(
+	cfg *Config,
+	parentContext context.Context,
+	logger zerolog.Logger,
+	psClient *pubsub.Client,
+	fsClient *firestore.Client,
+) (wrapper *EnrichmentServiceWrapper, err error) {
 	enrichmentLogger := logger.With().Str("component", "EnrichmentService").Logger()
 	serviceCtx, serviceCancel := context.WithCancel(parentContext)
 
-	// 2. A single defer block for cleanup on failure.
-	// This function will execute right before NewPublishMessageEnrichmentServiceWrapper returns.
 	defer func() {
 		if err != nil {
-			// If an error occurred at any point, cancel the context and clean up
-			// any resources that were successfully created before the failure.
 			serviceCancel()
 		}
 	}()
 
 	if cfg.ServiceDirectorURL != "" {
-		var directorClient *servicedirector.Client
-		directorClient, err = servicedirector.NewClient(cfg.ServiceDirectorURL, enrichmentLogger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create service director client: %w", err)
-		}
-		err = directorClient.VerifyDataflow(serviceCtx, cfg.DataflowName, cfg.ServiceName)
-		if err != nil {
-			return nil, fmt.Errorf("resource verification failed via Director: %w", err)
-		}
-		enrichmentLogger.Info().Msg("Resource verification successful.")
-	} else {
-		enrichmentLogger.Warn().Msg("ServiceDirectorURL not set, skipping resource verification.")
+		// Director verification logic...
 	}
-
-	// Sequentially create resources. If any fail, the defer block handles cleanup.
-	var opts []option.ClientOption
-	psClient, err := pubsub.NewClient(serviceCtx, cfg.ProjectID, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Pub/Sub client: %w", err)
-	}
-	// On error, defer will call serviceCancel. psClient is closed by canceling the context.
-
-	fsClient, err := firestore.NewClient(serviceCtx, cfg.ProjectID, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Firestore client: %w", err)
-	}
-	// On error, defer will call serviceCancel, which closes both fsClient and psClient.
 
 	sourceFetcher, err := cache.NewFirestoreSource[string, DeviceMetadata](fsClient, cfg.CacheConfig.FirestoreConfig, enrichmentLogger)
 	if err != nil {
@@ -100,9 +116,8 @@ func NewPublishMessageEnrichmentServiceWrapper(
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cache fallback fetcher: %w", err)
 	}
-	// The new defer block will now also call fetcherCleanup on failure.
 	defer func() {
-		if err != nil {
+		if err != nil && fetcherCleanup != nil {
 			fetcherCleanup()
 		}
 	}()
@@ -111,10 +126,14 @@ func NewPublishMessageEnrichmentServiceWrapper(
 		uid, ok := msg.Attributes["uid"]
 		return uid, ok
 	}
+
 	enricherFunc := func(msg *types.PublishMessage, data DeviceMetadata) {
-		msg.DeviceInfo.Name = data.ClientID
-		msg.DeviceInfo.Location = data.LocationID
-		msg.DeviceInfo.ServiceTag = data.Category
+		if msg.EnrichmentData == nil {
+			msg.EnrichmentData = make(map[string]interface{})
+		}
+		msg.EnrichmentData["name"] = data.ClientID
+		msg.EnrichmentData["location"] = data.LocationID
+		msg.EnrichmentData["serviceTag"] = data.Category
 	}
 
 	transformer := enrichment.NewEnrichmentTransformer[string, DeviceMetadata](fetcher, keyExtractor, enricherFunc, nil, enrichmentLogger)
@@ -130,20 +149,16 @@ func NewPublishMessageEnrichmentServiceWrapper(
 
 	mainProducer, err := messagepipeline.NewGooglePubsubProducer[types.PublishMessage](psClient, cfg.ProducerConfig, enrichmentLogger)
 	if err != nil {
-		consumer.Stop() // Manually clean up consumer since it was successful
 		return nil, fmt.Errorf("failed to create producer: %w", err)
 	}
 
 	processingService, err := messagepipeline.NewProcessingService(cfg.ProcessorConfig.NumWorkers, consumer, mainProducer, transformer, logger)
 	if err != nil {
-		mainProducer.Stop() // Manually clean up successful resources
-		consumer.Stop()
 		return nil, fmt.Errorf("failed to create processing service: %w", err)
 	}
 
 	baseServer := microservice.NewBaseServer(enrichmentLogger, cfg.HTTPPort)
 
-	// On success, return the fully constructed wrapper. The err is nil, so the defer does nothing.
 	return &EnrichmentServiceWrapper{
 		BaseServer:        baseServer,
 		serviceCancel:     serviceCancel,

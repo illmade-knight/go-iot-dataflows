@@ -45,10 +45,10 @@ func NewBQServiceWrapper[T any](
 		if err != nil {
 			// If an error occurred, clean up any clients that were successfully created.
 			if bqClient != nil {
-				bqClient.Close()
+				_ = bqClient.Close()
 			}
 			if psClient != nil {
-				psClient.Close()
+				_ = psClient.Close()
 			}
 			serviceCancel()
 		}
@@ -152,12 +152,12 @@ func (s *BQServiceWrapper[T]) Shutdown() {
 	s.BaseServer.Shutdown()
 
 	if s.bqClient != nil {
-		s.bqClient.Close()
-		s.logger.Info().Msg("BigQuery client closed.")
+		err := s.bqClient.Close()
+		s.logger.Info().Err(err).Msg("BigQuery client closed.")
 	}
 	if s.pubsubClient != nil {
-		s.pubsubClient.Close()
-		s.logger.Info().Msg("Pub/Sub client closed.")
+		err := s.pubsubClient.Close()
+		s.logger.Info().Err(err).Msg("Pub/Sub client closed.")
 	}
 }
 

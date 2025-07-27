@@ -44,7 +44,9 @@ func TestIngestionService_Integration(t *testing.T) {
 	// Create a shared Pub/Sub client pointing to the emulator
 	psClient, err := pubsub.NewClient(ctx, "test-project", pubsubConnection.ClientOptions...)
 	require.NoError(t, err)
-	defer psClient.Close()
+	defer func(psClient *pubsub.Client) {
+		_ = psClient.Close()
+	}(psClient)
 
 	// Manually create the configuration for each component
 	mqttCfg := MQTTClientConfig{

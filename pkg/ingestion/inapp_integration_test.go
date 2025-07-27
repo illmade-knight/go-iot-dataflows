@@ -73,7 +73,9 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 
 	subClient, err := pubsub.NewClient(ctx, "test-project", pubsubConnection.ClientOptions...)
 	require.NoError(t, err)
-	defer subClient.Close()
+	defer func(subClient *pubsub.Client) {
+		_ = subClient.Close()
+	}(subClient)
 	processedSub := subClient.Subscription("ingestion-verifier-sub")
 
 	// --- 5. Publish a Test Message and Verify the Result ---

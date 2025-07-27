@@ -25,6 +25,7 @@ type MQTTClientConfig struct {
 
 // LoadMQTTClientConfigFromEnv loads MQTT configuration from environment variables.
 func LoadMQTTClientConfigFromEnv() (*MQTTClientConfig, error) {
+
 	cfg := &MQTTClientConfig{
 		BrokerURL:        os.Getenv("MQTT_BROKER_URL"),
 		Topic:            os.Getenv("MQTT_TOPIC"),
@@ -44,10 +45,10 @@ func LoadMQTTClientConfigFromEnv() (*MQTTClientConfig, error) {
 	}
 
 	if cfg.BrokerURL == "" {
-		return nil, errors.New("MQTT_BROKER_URL environment variable not set")
+		return cfg, errors.New("MQTT_BROKER_URL environment variable not set")
 	}
 	if cfg.Topic == "" {
-		return nil, errors.New("MQTT_TOPIC environment variable not set")
+		return cfg, errors.New("MQTT_TOPIC environment variable not set")
 	}
 	if cfg.ClientIDPrefix == "" {
 		cfg.ClientIDPrefix = "ingestion-service-" // Default prefix

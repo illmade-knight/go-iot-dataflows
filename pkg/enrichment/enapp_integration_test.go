@@ -6,6 +6,7 @@ import (
 	"cloud.google.com/go/firestore"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/google/uuid"
 	"github.com/illmade-knight/go-cloud-manager/microservice"
@@ -50,7 +51,7 @@ func receiveSingleMessage(t *testing.T, ctx context.Context, sub *pubsub.Subscri
 	})
 
 	// context.Canceled is the expected error when pullCancel() is called on success.
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Logf("Receive loop ended with an unexpected error: %v", err)
 	}
 
@@ -85,7 +86,7 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	fsClient, err := firestore.NewClient(ctx, projectID, firestoreConn.ClientOptions...)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		fsClient.Close()
+		_ = fsClient.Close()
 	})
 
 	testDeviceID := "device-001"
@@ -124,13 +125,16 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	// --- 5. Setup Test Pub/Sub Client for Publishing/Verifying ---
 	psClient, err := pubsub.NewClient(ctx, projectID, pubsubConn.ClientOptions...)
 	t.Cleanup(func() {
-		psClient.Close()
+		_ = psClient.Close()
 	})
 
 	inputTopic, err := psClient.CreateTopic(ctx, inputTopicID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		inputTopic.Delete(ctx)
+		err = inputTopic.Delete(ctx)
+		if err != nil {
+			t.Logf("Error deleting topic: %v", err)
+		}
 	})
 
 	inputSub, err := psClient.CreateSubscription(ctx, inputSubID, pubsub.SubscriptionConfig{
@@ -138,23 +142,32 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		inputSub.Delete(ctx)
+		err = inputSub.Delete(ctx)
+		if err != nil {
+			t.Logf("Error deleting subscription: %v", err)
+		}
 	})
 
 	outputTopic, err := psClient.CreateTopic(ctx, outputTopicID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		outputTopic.Delete(ctx)
+		err = outputTopic.Delete(ctx)
+		if err != nil {
+			t.Logf("Error deleting topic: %v", err)
+		}
 	})
 	deadLetterTopic, err := psClient.CreateTopic(ctx, deadLetterTopicID)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		deadLetterTopic.Delete(ctx)
+		err = deadLetterTopic.Delete(ctx)
+		if err != nil {
+			t.Logf("Error deleting topic: %v", err)
+		}
 	})
 
 	// --- 4. Create and Start the Service Wrapper ---
 	// Note: The wrapper creates its own internal Pub/Sub and Firestore clients.
-	wrapper, err := NewPublishMessageEnrichmentServiceWrapperWithClients(cfg, ctx, logger, psClient, fsClient)
+	wrapper, err := NewPublishMessageEnrichmentServiceWrapperWithClients(cfg, logger, psClient, fsClient)
 	require.NoError(t, err)
 
 	go func() {
@@ -170,7 +183,10 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 		verifierSub, err := psClient.CreateSubscription(ctx, "verifier-sub-ok", pubsub.SubscriptionConfig{Topic: outputTopic})
 		require.NoError(t, err)
 		t.Cleanup(func() {
-			verifierSub.Delete(ctx)
+			err = verifierSub.Delete(ctx)
+			if err != nil {
+				t.Logf("Error deleting subscription: %v", err)
+			}
 		})
 
 		// Publish a message that should be successfully enriched

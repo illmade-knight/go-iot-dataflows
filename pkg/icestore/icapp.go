@@ -1,4 +1,3 @@
-// github.com/illmade-knight/go-iot-dataflows/builder/icestore/app.go
 package icestore
 
 import (
@@ -45,10 +44,10 @@ func NewIceStoreServiceWrapper(
 		if err != nil {
 			// If an error occurred, clean up any clients that were successfully created.
 			if gcsClient != nil {
-				gcsClient.Close()
+				_ = gcsClient.Close()
 			}
 			if psClient != nil {
-				psClient.Close()
+				_ = psClient.Close()
 			}
 			serviceCancel()
 		}

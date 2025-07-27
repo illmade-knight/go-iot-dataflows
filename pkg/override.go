@@ -6,7 +6,7 @@ import (
 	"time"
 )
 
-// Helper functions (could be moved to a shared package)
+// OverrideWithStringEnvVar Helper functions (could be moved to a shared package)
 func OverrideWithStringEnvVar(envKey string, value *string) {
 	if envVal, exists := os.LookupEnv(envKey); exists {
 		*value = envVal

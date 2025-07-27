@@ -40,7 +40,7 @@ func (m *MockProcessor[T]) Input() chan<- *types.BatchedMessage[T] {
 	return m.inputChan
 }
 
-func (m *MockProcessor[T]) Start(ctx context.Context) {
+func (m *MockProcessor[T]) Start(_ context.Context) {
 	// In the mock, we just need to drain the input channel to collect messages.
 	go func() {
 		for msg := range m.inputChan {
@@ -88,16 +88,23 @@ func TestProcessSingleMessage(t *testing.T) {
 	t.Run("With Transformer Success", func(t *testing.T) {
 		// Arrange
 		transformer := func(msg InMessage) (*MockPayload, bool, error) {
+			t.Logf("transformer got msg %+v", msg)
 			return &MockPayload{Data: "transformed"}, false, nil
 		}
 		service, processor := setupTestService(t, transformer)
+		err := service.Start()
+		require.NoError(t, err)
+		defer service.Stop()
+
 		msg := InMessage{Payload: []byte(`{}`), Topic: "test/topic"}
 
 		// Act
 		service.processSingleMessage(context.Background(), msg, 1)
 
-		// Assert
-		require.Equal(t, 1, processor.GetMessageCount(), "Processor should have received one message")
+		require.Eventually(t, func() bool {
+			return processor.GetMessageCount() == 1
+		}, 1*time.Second, 10*time.Millisecond, "Processor should have received one message")
+
 		publishedMsg := processor.ReceivedMessages[0]
 		assert.Equal(t, "transformed", publishedMsg.Payload.Data)
 		assert.Equal(t, "test/topic", publishedMsg.OriginalMessage.Attributes["mqtt_topic"])
@@ -151,7 +158,10 @@ func TestService_InternalPipeline(t *testing.T) {
 
 	err := service.Start()
 	require.NoError(t, err)
-	defer service.Stop()
+	t.Cleanup(func() {
+		service.Stop()
+		assert.True(t, processor.stopCalled, "Processor's Stop method should be called during service shutdown")
+	})
 
 	// Act
 	msg := InMessage{Payload: []byte(`{}`), Topic: "e2e/topic"}
@@ -163,8 +173,8 @@ func TestService_InternalPipeline(t *testing.T) {
 	}, 1*time.Second, 10*time.Millisecond, "Expected one message to be processed")
 
 	publishedMsg := processor.ReceivedMessages[0]
+
 	assert.Equal(t, "e2e-transformed", publishedMsg.Payload.Data)
-	assert.True(t, processor.stopCalled, "Processor's Stop method should be called during service shutdown")
 }
 
 // TestService_Stop ensures that the service shuts down gracefully.

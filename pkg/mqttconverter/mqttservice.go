@@ -1,4 +1,3 @@
-// mqttconverter/mqttservice.go
 package mqttconverter
 
 import (
@@ -282,11 +281,11 @@ func (s *IngestionService[T]) onPahoConnect(client mqtt.Client) {
 	}
 }
 
-func (s *IngestionService[T]) onPahoConnectionLost(client mqtt.Client, err error) {
+func (s *IngestionService[T]) onPahoConnectionLost(_ mqtt.Client, err error) {
 	s.logger.Error().Err(err).Msg("Paho client lost MQTT connection. Auto-reconnect will be attempted.")
 }
 
-func newTLSConfig(cfg *MQTTClientConfig, logger zerolog.Logger) (*tls.Config, error) {
+func newTLSConfig(cfg *MQTTClientConfig, _ zerolog.Logger) (*tls.Config, error) {
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: cfg.InsecureSkipVerify,
 	}

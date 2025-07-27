@@ -1,4 +1,3 @@
-// builder/ingestion/inapp.go
 package ingestion
 
 import (
@@ -46,7 +45,7 @@ func NewIngestionServiceWrapper(
 	defer func() {
 		if err != nil {
 			if psClient != nil {
-				psClient.Close()
+				_ = psClient.Close()
 			}
 			serviceCancel()
 		}

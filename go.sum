@@ -168,6 +168,7 @@ github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.1 h1:X5VWvz21y3gzm9Nw/kaUeku/1+u
 github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.1/go.mod h1:Zanoh4+gvIgluNqcfMVTJueD4wSS5hT7zTt4Mrutd90=
 github.com/illmade-knight/go-dataflow v0.0.12-beta h1:q6pD+ytx8CnWZLPUzpNbF7NIZ9AlK4mTHZF5je4ggAM=
 github.com/illmade-knight/go-dataflow v0.0.12-beta/go.mod h1:UkEKs7GWk6T9Xq184aL9fp1MuJwIRFBQFy9Hhw22kaA=
+github.com/illmade-knight/go-dataflow v0.0.13-beta/go.mod h1:UkEKs7GWk6T9Xq184aL9fp1MuJwIRFBQFy9Hhw22kaA=
 github.com/illmade-knight/go-test v0.0.2-beta h1:b7LKySBc2v93kU4JhSv4FzDdVAO0UD/2YyFtCv/LKco=
 github.com/illmade-knight/go-test v0.0.2-beta/go.mod h1:7xqTQamAwyaUSoWSfv4NwSRmcnkMUAtOz1XqngjeJTY=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=

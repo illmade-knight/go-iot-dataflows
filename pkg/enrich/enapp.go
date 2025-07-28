@@ -122,8 +122,7 @@ func NewEnrichmentServiceWrapperWithClients(
 
 	transformer := enrichment.NewEnrichmentTransformer[string, DeviceMetadata](fetcher, keyExtractor, enricherFunc, nil, enrichmentLogger)
 
-	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
-	consumerCfg.ProjectID = cfg.ProjectID
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(cfg.ProjectID)
 	consumerCfg.SubscriptionID = cfg.Consumer.SubscriptionID
 	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, enrichmentLogger)
 	if err != nil {

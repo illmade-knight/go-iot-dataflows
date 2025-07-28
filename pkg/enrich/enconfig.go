@@ -42,14 +42,14 @@ type Config struct {
 	ClientConnections  map[string][]option.ClientOption
 }
 
-// LoadConfig initializes and loads configuration from defaults, flags, and environment variables.
-func LoadConfig() (*Config, error) {
+// LoadConfigDefaults initializes and loads configuration from defaults, flags, and environment variables.
+func LoadConfigDefaults(projectID string) (*Config, error) {
 	cfg := &Config{
 		BaseConfig: microservice.BaseConfig{
 			LogLevel: "debug",
 			HTTPPort: ":8082",
 		},
-		ProducerConfig: messagepipeline.NewGooglePubsubProducerDefaults(),
+		ProducerConfig: messagepipeline.NewGooglePubsubProducerDefaults(projectID),
 		CacheConfig: CacheConfig{
 			FirestoreConfig: &cache.FirestoreConfig{},
 		},

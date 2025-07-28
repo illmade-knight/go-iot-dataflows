@@ -31,12 +31,13 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	mqttConnection := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
 	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, emulators.GetDefaultPubsubConfig("test-project", map[string]string{"ingestion-output-topic": "ingestion-verifier-sub"}))
 
+	projectID := "test-project"
 	// --- 2. Configure the Ingestion Service Wrapper ---
-	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(projectID)
 	producerCfg.TopicID = "ingestion-output-topic"
 	cfg := &Config{
 		BaseConfig: microservice.BaseConfig{
-			ProjectID: "test-project",
+			ProjectID: projectID,
 			HTTPPort:  ":0",
 		},
 		MQTT: mqttconverter.MQTTClientConfig{

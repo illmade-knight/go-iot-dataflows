@@ -25,16 +25,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const (
-	projectID = "test-project"
-)
-
 func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	testContext, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
 
 	logger := zerolog.New(os.Stderr).Level(zerolog.DebugLevel)
 
+	projectID := "test-project"
 	// --- 1. Setup Emulators ---
 	rc := emulators.GetDefaultRedisImageContainer()
 	redisConn := emulators.SetupRedisContainer(t, testContext, rc)
@@ -59,7 +56,7 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// --- 3. Configure the Service Wrapper ---
-	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults(projectID)
 	producerCfg.TopicID = outputTopicID
 	cfg := &enrich.Config{
 		BaseConfig:     microservice.BaseConfig{ProjectID: projectID, HTTPPort: ":0"},

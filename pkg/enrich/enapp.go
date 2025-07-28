@@ -1,19 +1,18 @@
 // github.com/illmade-knight/go-iot-dataflows/builder/enrichment/enapp.go
-package enrichment
+package enrich
 
 import (
-	"cloud.google.com/go/firestore"
-	"cloud.google.com/go/pubsub"
 	"context"
 	"fmt"
-	"github.com/illmade-knight/go-cloud-manager/microservice"
-	"github.com/illmade-knight/go-cloud-manager/microservice/servicedirector"
+	"net/http"
+
+	"cloud.google.com/go/firestore"
+	"cloud.google.com/go/pubsub"
 	"github.com/illmade-knight/go-dataflow/pkg/cache"
 	"github.com/illmade-knight/go-dataflow/pkg/enrichment"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
+	"github.com/illmade-knight/go-dataflow/pkg/microservice"
 	"github.com/illmade-knight/go-dataflow/pkg/types"
-	"net/http"
-
 	"github.com/rs/zerolog"
 	"google.golang.org/api/option"
 )
@@ -26,38 +25,30 @@ type DeviceMetadata struct {
 }
 
 // EnrichmentServiceWrapper wraps the processing service for a common interface.
-// The wrapper is now concrete as it's specific to this application's purpose.
 type EnrichmentServiceWrapper struct {
 	*microservice.BaseServer
-	wrapperContext    context.Context
-	serviceCancel     context.CancelFunc
 	processingService *messagepipeline.ProcessingService[types.PublishMessage]
 	fetcherCleanup    func() error
 	logger            zerolog.Logger
 }
 
-// NewPublishMessageEnrichmentServiceWrapper creates and configures a new EnrichmentServiceWrapper.
-// NewPublishMessageEnrichmentServiceWrapper creates the service for production, creating its own clients.
-func NewPublishMessageEnrichmentServiceWrapper(
+// NewEnrichmentServiceWrapper creates and configures a new EnrichmentServiceWrapper.
+func NewEnrichmentServiceWrapper(
 	ctx context.Context,
-	parentContext context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
-) (serviceWrapper *EnrichmentServiceWrapper, err error) {
-	serviceCtx, serviceCancel := context.WithCancel(ctx)
-
+) (wrapper *EnrichmentServiceWrapper, err error) {
 	var psClient *pubsub.Client
 	var fsClient *firestore.Client
 
 	defer func() {
 		if err != nil {
 			if psClient != nil {
-				psClient.Close()
+				_ = psClient.Close()
 			}
 			if fsClient != nil {
-				fsClient.Close()
+				_ = fsClient.Close()
 			}
-			serviceCancel()
 		}
 	}()
 
@@ -65,7 +56,7 @@ func NewPublishMessageEnrichmentServiceWrapper(
 	if cfg.ClientConnections != nil {
 		psOpts = cfg.ClientConnections["pubsub"]
 	}
-	psClient, err = pubsub.NewClient(serviceCtx, cfg.ProjectID, psOpts...)
+	psClient, err = pubsub.NewClient(ctx, cfg.ProjectID, psOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Pub/Sub client: %w", err)
 	}
@@ -74,16 +65,16 @@ func NewPublishMessageEnrichmentServiceWrapper(
 	if cfg.ClientConnections != nil {
 		fsOpts = cfg.ClientConnections["firestore"]
 	}
-	fsClient, err = firestore.NewClient(serviceCtx, cfg.ProjectID, fsOpts...)
+	fsClient, err = firestore.NewClient(ctx, cfg.ProjectID, fsOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Firestore client: %w", err)
 	}
 
-	return NewPublishMessageEnrichmentServiceWrapperWithClients(ctx, cfg, logger, psClient, fsClient)
+	return NewEnrichmentServiceWrapperWithClients(ctx, cfg, logger, psClient, fsClient)
 }
 
-// NewPublishMessageEnrichmentServiceWrapperWithClients creates the service with injected clients for testability.
-func NewPublishMessageEnrichmentServiceWrapperWithClients(
+// NewEnrichmentServiceWrapperWithClients creates the service with injected clients for testability.
+func NewEnrichmentServiceWrapperWithClients(
 	ctx context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
@@ -91,50 +82,29 @@ func NewPublishMessageEnrichmentServiceWrapperWithClients(
 	fsClient *firestore.Client,
 ) (wrapper *EnrichmentServiceWrapper, err error) {
 	enrichmentLogger := logger.With().Str("component", "EnrichmentService").Logger()
-	serviceCtx, serviceCancel := context.WithCancel(ctx)
 
+	var fetcherCleanup func() error
 	defer func() {
-		if err != nil {
-			serviceCancel()
+		if err != nil && fetcherCleanup != nil {
+			_ = fetcherCleanup()
 		}
 	}()
 
-	if cfg.ServiceDirectorURL != "" {
-		var directorClient *servicedirector.Client
-		directorClient, err = servicedirector.NewClient(cfg.ServiceDirectorURL, enrichmentLogger)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create service director client: %w", err)
-		}
-		if err = directorClient.VerifyDataflow(serviceCtx, cfg.DataflowName, cfg.ServiceName); err != nil {
-			return nil, fmt.Errorf("resource verification failed via Director: %w", err)
-		}
-		enrichmentLogger.Info().Msg("Resource verification successful.")
-	} else {
-		enrichmentLogger.Warn().Msg("ServiceDirectorURL not set, skipping resource verification.")
-	}
-
-	sourceFetcher, err := cache.NewFirestoreSource[string, DeviceMetadata](fsClient, cfg.CacheConfig.FirestoreConfig, enrichmentLogger)
+	sourceFetcher, err := cache.NewFirestoreSource[string, DeviceMetadata](cfg.CacheConfig.FirestoreConfig, fsClient, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Firestore source fetcher: %w", err)
 	}
 
-	redisCache, err := cache.NewRedisCache[string, DeviceMetadata](serviceCtx, &cfg.CacheConfig.RedisConfig, enrichmentLogger)
+	redisCache, err := cache.NewRedisCache[string, DeviceMetadata](ctx, &cfg.CacheConfig.RedisConfig, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create redis cache layer: %w", err)
 	}
 
-	fetcher, fetcherCleanup, err := enrichment.NewCacheFallbackFetcher[string, DeviceMetadata](serviceCtx, redisCache, sourceFetcher, enrichmentLogger)
+	fetcherCfg := &enrichment.FetcherConfig{CacheWriteTimeout: cfg.CacheConfig.CacheWriteTimeout}
+	fetcher, fetcherCleanup, err := enrichment.NewCacheFallbackFetcher[string, DeviceMetadata](fetcherCfg, redisCache, sourceFetcher, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cache fallback fetcher: %w", err)
 	}
-	defer func() {
-		if err != nil && fetcherCleanup != nil {
-			err = fetcherCleanup()
-			if err != nil {
-				enrichmentLogger.Warn().Err(err).Msg("failed to cleanup fetcher")
-			}
-		}
-	}()
 
 	keyExtractor := func(msg types.ConsumedMessage) (string, bool) {
 		uid, ok := msg.Attributes["uid"]
@@ -152,16 +122,15 @@ func NewPublishMessageEnrichmentServiceWrapperWithClients(
 
 	transformer := enrichment.NewEnrichmentTransformer[string, DeviceMetadata](fetcher, keyExtractor, enricherFunc, nil, enrichmentLogger)
 
-	consumerCfg := &messagepipeline.GooglePubsubConsumerConfig{
-		ProjectID:      cfg.ProjectID,
-		SubscriptionID: cfg.Consumer.SubscriptionID,
-	}
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(serviceCtx, consumerCfg, psClient, enrichmentLogger)
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
+	consumerCfg.ProjectID = cfg.ProjectID
+	consumerCfg.SubscriptionID = cfg.Consumer.SubscriptionID
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create consumer: %w", err)
 	}
 
-	mainProducer, err := messagepipeline.NewGooglePubsubProducer[types.PublishMessage](serviceCtx, psClient, cfg.ProducerConfig, enrichmentLogger)
+	mainProducer, err := messagepipeline.NewGooglePubsubProducer[types.PublishMessage](ctx, cfg.ProducerConfig, psClient, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create producer: %w", err)
 	}
@@ -175,29 +144,27 @@ func NewPublishMessageEnrichmentServiceWrapperWithClients(
 
 	return &EnrichmentServiceWrapper{
 		BaseServer:        baseServer,
-		serviceCancel:     serviceCancel,
-		wrapperContext:    serviceCtx,
 		processingService: processingService,
 		fetcherCleanup:    fetcherCleanup,
 		logger:            enrichmentLogger,
 	}, nil
 }
 
-func (s *EnrichmentServiceWrapper) Start() error {
+// Start initiates the processing service and the embedded HTTP server.
+func (s *EnrichmentServiceWrapper) Start(ctx context.Context) error {
 	s.logger.Info().Msg("Starting enrichment server components...")
-	if err := s.processingService.Start(s.wrapperContext); err != nil {
+	if err := s.processingService.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start processing service: %w", err)
 	}
 	s.logger.Info().Msg("Data processing service started.")
 	return s.BaseServer.Start()
 }
 
-func (s *EnrichmentServiceWrapper) Shutdown() {
+// Shutdown gracefully stops the processing service and its components.
+func (s *EnrichmentServiceWrapper) Shutdown(ctx context.Context) error {
 	s.logger.Info().Msg("Shutting down enrichment server components...")
-	s.serviceCancel()
-	s.processingService.Stop()
+	s.processingService.Stop(ctx)
 	s.logger.Info().Msg("Data processing service stopped.")
-	s.BaseServer.Shutdown()
 
 	if s.fetcherCleanup != nil {
 		if err := s.fetcherCleanup(); err != nil {
@@ -205,6 +172,7 @@ func (s *EnrichmentServiceWrapper) Shutdown() {
 		}
 	}
 	s.logger.Info().Msg("Enrichment server shut down gracefully.")
+	return s.BaseServer.Shutdown(ctx)
 }
 
 func (s *EnrichmentServiceWrapper) Mux() *http.ServeMux {

@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"cloud.google.com/go/pubsub"
-	"github.com/illmade-knight/go-cloud-manager/microservice"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
-	"github.com/illmade-knight/go-iot-dataflows/pkg/mqttconverter"
+	"github.com/illmade-knight/go-dataflow/pkg/microservice"
+	"github.com/illmade-knight/go-dataflow/pkg/mqttconverter"
 	"github.com/illmade-knight/go-test/emulators"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
@@ -22,104 +22,96 @@ import (
 )
 
 func TestIngestionServiceWrapper_Integration(t *testing.T) {
-	testContext, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	t.Cleanup(cancel)
 
 	// --- 1. Setup Emulators and Logger ---
-	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stdout, TimeFormat: time.RFC3339}).
-		Level(zerolog.DebugLevel).
-		With().Timestamp().Logger()
+	logger := zerolog.New(os.Stderr).Level(zerolog.InfoLevel)
 
-	mqttConnection := emulators.SetupMosquittoContainer(t, testContext, emulators.GetDefaultMqttImageContainer())
-	pubsubConnection := emulators.SetupPubsubEmulator(t, testContext, emulators.GetDefaultPubsubConfig("test-project", map[string]string{"ingestion-output-topic": "ingestion-verifier-sub"}))
+	mqttConnection := emulators.SetupMosquittoContainer(t, ctx, emulators.GetDefaultMqttImageContainer())
+	pubsubConnection := emulators.SetupPubsubEmulator(t, ctx, emulators.GetDefaultPubsubConfig("test-project", map[string]string{"ingestion-output-topic": "ingestion-verifier-sub"}))
 
 	// --- 2. Configure the Ingestion Service Wrapper ---
-	// This configures the application exactly as it would run, but points it to our emulators.
+	producerCfg := messagepipeline.NewGooglePubsubProducerDefaults()
+	producerCfg.TopicID = "ingestion-output-topic"
 	cfg := &Config{
 		BaseConfig: microservice.BaseConfig{
 			ProjectID: "test-project",
-			HTTPPort:  ":0", // Use a random available port for the test
+			HTTPPort:  ":0",
 		},
 		MQTT: mqttconverter.MQTTClientConfig{
 			BrokerURL:      mqttConnection.EmulatorAddress,
 			Topic:          "devices/+/data",
 			ClientIDPrefix: "ingestion-wrapper-test-",
+			ConnectTimeout: 10 * time.Second,
 		},
-		Producer: messagepipeline.GooglePubsubProducerConfig{
-			TopicID: "ingestion-output-topic",
-		},
-		Service:       mqttconverter.DefaultIngestionServiceConfig(),
-		PubsubOptions: pubsubConnection.ClientOptions, // Critical line to point to the emulator
+		Producer:             *producerCfg,
+		NumProcessingWorkers: 5,
+		PubsubOptions:        pubsubConnection.ClientOptions,
 	}
 
 	// --- 3. Create and Start the Service Wrapper ---
-	serviceWrapper, err := NewIngestionServiceWrapper(testContext, cfg, logger)
+	serviceWrapper, err := NewIngestionServiceWrapper(ctx, cfg, logger)
 	require.NoError(t, err)
 
+	serviceCtx, serviceCancel := context.WithCancel(ctx)
+	t.Cleanup(serviceCancel)
 	go func() {
-		if startErr := serviceWrapper.Start(); startErr != nil {
-			t.Logf("IngestionServiceWrapper.Start() failed during test: %v", startErr)
+		if startErr := serviceWrapper.Start(serviceCtx); startErr != nil {
+			// Don't fail the test on context cancellation during cleanup.
+			if !errors.Is(startErr, context.Canceled) {
+				t.Logf("IngestionServiceWrapper.Start() failed during test: %v", startErr)
+			}
 		}
 	}()
-	defer serviceWrapper.Shutdown()
-
-	// Give the service a moment to connect and subscribe to MQTT
-	time.Sleep(2 * time.Second)
+	t.Cleanup(func() {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
+		_ = serviceWrapper.Shutdown(shutdownCtx)
+	})
 
 	// --- 4. Setup Test Clients ---
 	mqttTestPubClient, err := emulators.CreateTestMqttPublisher(mqttConnection.EmulatorAddress, "test-publisher-main")
 	require.NoError(t, err)
-	defer mqttTestPubClient.Disconnect(250)
+	t.Cleanup(func() { mqttTestPubClient.Disconnect(250) })
 
-	subClient, err := pubsub.NewClient(testContext, "test-project", pubsubConnection.ClientOptions...)
+	subClient, err := pubsub.NewClient(ctx, "test-project", pubsubConnection.ClientOptions...)
 	require.NoError(t, err)
-	defer func(subClient *pubsub.Client) {
-		_ = subClient.Close()
-	}(subClient)
+	t.Cleanup(func() { _ = subClient.Close() })
 	processedSub := subClient.Subscription("ingestion-verifier-sub")
 
 	// --- 5. Publish a Test Message and Verify the Result ---
 	t.Run("Publish MQTT and Verify PubSub Output", func(t *testing.T) {
-		// Define the raw payload a device would send
 		devicePayload := map[string]interface{}{"temperature": 25.5, "humidity": 60}
 		payloadBytes, err := json.Marshal(devicePayload)
 		require.NoError(t, err)
 
 		publishTopic := "devices/test-device-123/data"
-
-		// Publish the message to the MQTT broker
 		token := mqttTestPubClient.Publish(publishTopic, 1, false, payloadBytes)
-		require.True(t, token.WaitTimeout(10*time.Second), "MQTT Publish token timed out")
-		require.NoError(t, token.Error(), "MQTT Publish failed")
-		logger.Info().Str("topic", publishTopic).Msg("Test message published to MQTT broker")
+		token.Wait()
+		require.NoError(t, token.Error())
 
 		// --- Verification ---
-		pullCtx, pullCancel := context.WithTimeout(testContext, 30*time.Second)
-		defer pullCancel()
+		pullCtx, pullCancel := context.WithTimeout(ctx, 30*time.Second)
+		t.Cleanup(pullCancel)
 
 		var receivedMsg *pubsub.Message
 		err = processedSub.Receive(pullCtx, func(ctxMsg context.Context, msg *pubsub.Message) {
-			logger.Info().Str("id", msg.ID).Msg("Received message from Pub/Sub for verification")
 			msg.Ack()
 			receivedMsg = msg
 			pullCancel() // Stop receiving after the first message
 		})
 
-		// We expect the context to be canceled by a successful receive.
-		// Any other error (like DeadlineExceeded) is a failure.
 		if err != nil && !errors.Is(err, context.Canceled) {
 			require.NoError(t, err, "Receiving from Pub/Sub failed")
 		}
 		require.NotNil(t, receivedMsg, "Did not receive a message from Pub/Sub")
 
-		// Unmarshal and assert the structure of the message published by the service
-		var result RawMessage
+		var result mqttconverter.RawMessage
 		err = json.Unmarshal(receivedMsg.Data, &result)
-		require.NoError(t, err, "Failed to unmarshal received Pub/Sub message into RawMessage struct")
+		require.NoError(t, err)
 
 		assert.Equal(t, publishTopic, result.Topic)
 		assert.JSONEq(t, string(payloadBytes), string(result.Payload))
-		_, err = time.Parse(time.RFC3339Nano, result.Timestamp)
-		assert.NoError(t, err, "Timestamp should be in a valid RFC3339Nano format")
 	})
 }

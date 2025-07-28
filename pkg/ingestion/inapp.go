@@ -2,114 +2,97 @@ package ingestion
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
 	"cloud.google.com/go/pubsub"
 	"github.com/rs/zerolog"
 
-	"github.com/illmade-knight/go-cloud-manager/microservice"
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
-	"github.com/illmade-knight/go-iot-dataflows/pkg/mqttconverter"
+	"github.com/illmade-knight/go-dataflow/pkg/microservice"
+	"github.com/illmade-knight/go-dataflow/pkg/mqttconverter"
+	"github.com/illmade-knight/go-dataflow/pkg/types"
 )
 
-// RawMessage defines the canonical structure for messages published by this service.
-type RawMessage struct {
-	Topic     string          `json:"topic"`
-	Payload   json.RawMessage `json:"payload"`
-	Timestamp string          `json:"timestamp"`
-}
-
-// IngestionServiceWrapper wraps the core MQTT ingestion logic.
+// IngestionServiceWrapper now wraps the generic ProcessingService.
 type IngestionServiceWrapper struct {
 	*microservice.BaseServer
-	ingestionService *mqttconverter.IngestionService[RawMessage] // Now generic
-	logger           zerolog.Logger
+	processingService *messagepipeline.ProcessingService[mqttconverter.RawMessage]
+	logger            zerolog.Logger
 }
 
-// NewIngestionServiceWrapper creates and configures the full ingestion service.
+// NewIngestionServiceWrapper assembles the full ingestion pipeline from standard components.
 func NewIngestionServiceWrapper(
 	ctx context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
-) (wrapper *IngestionServiceWrapper, err error) {
+) (*IngestionServiceWrapper, error) {
 
-	serviceContext, serviceCancel := context.WithCancel(ctx)
-	defer serviceCancel()
+	serviceLogger := logger.With().Str("service", "IngestionService").Logger()
 
-	ingestionLogger := logger.With().Str("component", "IngestionService").Logger()
-
-	var psClient *pubsub.Client
-
-	defer func() {
-		if err != nil {
-			if psClient != nil {
-				_ = psClient.Close()
-			}
-			serviceCancel()
-		}
-	}()
-
-	psClient, err = pubsub.NewClient(serviceContext, cfg.ProjectID, cfg.PubsubOptions...)
+	psClient, err := pubsub.NewClient(ctx, cfg.ProjectID, cfg.PubsubOptions...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
-	// 1. Create the producer from the generic messagepipeline package
-	producer, err := messagepipeline.NewGooglePubsubProducer[RawMessage](ctx, psClient, &cfg.Producer, ingestionLogger)
+
+	// 2. Create the MqttConsumer, injecting the client.
+	consumer, err := mqttconverter.NewMqttConsumer(&cfg.MQTT, serviceLogger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create MQTT consumer: %w", err)
+	}
+
+	// 3. Create the GooglePubsubProducer.
+	producer, err := messagepipeline.NewGooglePubsubProducer[mqttconverter.RawMessage](ctx, &cfg.Producer, psClient, serviceLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Google Pub/Sub producer: %w", err)
 	}
 
-	// 2. Define the transformer to convert MQTT messages to our RawMessage format
-	transformer := func(msg mqttconverter.InMessage) (*RawMessage, bool, error) {
-		if msg.Duplicate {
-			return nil, true, nil // Skip duplicates
-		}
-		transformed := &RawMessage{
-			Topic:     msg.Topic,
-			Payload:   msg.Payload, // The payload is already raw bytes
-			Timestamp: msg.Timestamp.Format(time.RFC3339Nano),
+	// 4. Define the transformer logic.
+	transformer := func(ctx context.Context, msg types.ConsumedMessage) (*mqttconverter.RawMessage, bool, error) {
+		transformed := &mqttconverter.RawMessage{
+			Topic:     msg.Attributes["mqtt_topic"],
+			Payload:   msg.Payload,
+			Timestamp: msg.PublishTime,
 		}
 		return transformed, false, nil
 	}
 
-	// 3. Create the ingestion service, now passing the generic producer and transformer
-	ingestionService := mqttconverter.NewIngestionService[RawMessage](
-		serviceContext,
+	// 5. Create the generic ProcessingService.
+	processingService, err := messagepipeline.NewProcessingService[mqttconverter.RawMessage](
+		cfg.NumProcessingWorkers,
+		consumer,
 		producer,
 		transformer,
-		ingestionLogger,
-		cfg.Service,
-		cfg.MQTT,
+		serviceLogger,
 	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create processing service: %w", err)
+	}
 
-	baseServer := microservice.NewBaseServer(ingestionLogger, cfg.HTTPPort)
-
+	baseServer := microservice.NewBaseServer(logger, cfg.HTTPPort)
 	return &IngestionServiceWrapper{
-		BaseServer:       baseServer,
-		ingestionService: ingestionService,
-		logger:           ingestionLogger,
+		BaseServer:        baseServer,
+		processingService: processingService,
+		logger:            serviceLogger,
 	}, nil
 }
 
-// Start initiates the MQTT ingestion service and the embedded HTTP server.
-func (s *IngestionServiceWrapper) Start() error {
-	s.logger.Info().Msg("Starting MQTT ingestion server components...")
-	if err := s.ingestionService.Start(); err != nil {
-		s.logger.Error().Err(err).Msg("failed to start core ingestion service")
+// Start initiates the processing service and the embedded HTTP server.
+func (s *IngestionServiceWrapper) Start(ctx context.Context) error {
+	s.logger.Info().Msg("Starting ingestion service components...")
+	if err := s.processingService.Start(ctx); err != nil {
+		s.logger.Error().Err(err).Msg("Failed to start core processing service")
 		return err
 	}
 	return s.BaseServer.Start()
 }
 
-// Shutdown gracefully stops the MQTT ingestion service.
-func (s *IngestionServiceWrapper) Shutdown() {
-	s.logger.Info().Msg("Shutting down MQTT ingestion server components...")
-	s.ingestionService.Stop()
-	s.logger.Info().Msg("Core ingestion service stopped.")
-	s.BaseServer.Shutdown()
+// Shutdown gracefully stops the processing service and the HTTP server.
+func (s *IngestionServiceWrapper) Shutdown(ctx context.Context) error {
+	s.logger.Info().Msg("Shutting down ingestion server components...")
+	s.processingService.Stop(ctx)
+	s.logger.Info().Msg("Core processing service stopped.")
+	return s.BaseServer.Shutdown(ctx)
 }
 
 // Mux returns the HTTP ServeMux for the service.

@@ -1,93 +1,75 @@
 package icestore
 
 import (
-	"cloud.google.com/go/pubsub"
-	"cloud.google.com/go/storage"
 	"context"
 	"fmt"
-	"github.com/illmade-knight/go-cloud-manager/microservice"
-	"github.com/illmade-knight/go-dataflow/pkg/icestore"        // Existing icestore package from go-iot
-	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline" // For MetricReporter
-	"os"
+	"net/http"
 	"strings"
+	"time"
 
+	"cloud.google.com/go/pubsub"
+	"cloud.google.com/go/storage"
+	"github.com/illmade-knight/go-dataflow/pkg/icestore"
+	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
+	"github.com/illmade-knight/go-dataflow/pkg/microservice"
+	"github.com/illmade-knight/go-dataflow/pkg/types"
 	"github.com/rs/zerolog"
-	"google.golang.org/api/option"
 )
 
 // IceStoreServiceWrapper wraps the IceStorageService for a common interface.
-// It implements the builder.Service interface.
 type IceStoreServiceWrapper struct {
-	*microservice.BaseServer                                                           // Embed the base server for common HTTP functionality
-	processingService        *messagepipeline.ProcessingService[icestore.ArchivalData] // The core processing logic
-	pubsubClient             *pubsub.Client                                            // Pub/Sub client for message consumption
-	gcsClient                *storage.Client                                           // GCS client for data archival
-	logger                   zerolog.Logger
-	bucketName               string // The GCS bucket name, needed for create/delete
-	projectID                string // The GCP Project ID, needed for bucket creation
+	*microservice.BaseServer
+	processingService *messagepipeline.ProcessingService[icestore.ArchivalData]
+	pubsubClient      *pubsub.Client
+	gcsClient         *storage.Client
+	logger            zerolog.Logger
+	bucketName        string
+	projectID         string
 }
 
 // NewIceStoreServiceWrapper creates and configures a new IceStoreServiceWrapper instance.
+// It uses a deferred function with a named error return to ensure resources are cleaned up on failure.
 func NewIceStoreServiceWrapper(
 	ctx context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
-) (wrapper *IceStoreServiceWrapper, err error) { // 1. Named error return
-	serviceCtx, serviceCancel := context.WithCancel(ctx)
+) (wrapper *IceStoreServiceWrapper, err error) {
 	isLogger := logger.With().Str("component", "IceStore").Logger()
 
-	// --- Client variables to be cleaned up by defer on failure ---
 	var gcsClient *storage.Client
 	var psClient *pubsub.Client
 
-	// 2. Single defer block for cleanup on initialization failure.
+	// This deferred function will execute if any part of the constructor fails and returns an error.
 	defer func() {
 		if err != nil {
-			// If an error occurred, clean up any clients that were successfully created.
+			isLogger.Error().Err(err).Msg("Failed to initialize IceStoreServiceWrapper, cleaning up resources.")
 			if gcsClient != nil {
-				_ = gcsClient.Close()
+				if closeErr := gcsClient.Close(); closeErr != nil {
+					isLogger.Error().Err(closeErr).Msg("Failed to close GCS client during error cleanup.")
+				}
 			}
 			if psClient != nil {
-				_ = psClient.Close()
+				if closeErr := psClient.Close(); closeErr != nil {
+					isLogger.Error().Err(closeErr).Msg("Failed to close Pub/Sub client during error cleanup.")
+				}
 			}
-			serviceCancel()
 		}
 	}()
 
-	var generalOpts []option.ClientOption
-	if cfg.CredentialsFile != "" {
-		generalOpts = append(generalOpts, option.WithCredentialsFile(cfg.CredentialsFile))
-	}
-
-	gcsOpts := append([]option.ClientOption{}, generalOpts...)
-	if cfg.IceStore.CredentialsFile != "" {
-		gcsOpts = []option.ClientOption{option.WithCredentialsFile(cfg.IceStore.CredentialsFile)}
-	}
-
-	if emulatorHost := os.Getenv("STORAGE_EMULATOR_HOST"); emulatorHost != "" {
-		gcsOpts = append(gcsOpts, option.WithoutAuthentication(), option.WithEndpoint(emulatorHost))
-	}
-
-	gcsClient, err = storage.NewClient(serviceCtx, gcsOpts...)
+	gcsClient, err = storage.NewClient(ctx, cfg.GCSOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create GCS client: %w", err)
 	}
 
-	psOpts := append([]option.ClientOption{}, generalOpts...)
-	if cfg.Consumer.CredentialsFile != "" {
-		psOpts = []option.ClientOption{option.WithCredentialsFile(cfg.Consumer.CredentialsFile)}
-	}
-
-	psClient, err = pubsub.NewClient(serviceCtx, cfg.ProjectID, psOpts...)
+	psClient, err = pubsub.NewClient(ctx, cfg.ProjectID, cfg.PubsubOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create pubsub client: %w", err)
 	}
 
-	consumerCfg := &messagepipeline.GooglePubsubConsumerConfig{
-		ProjectID:      cfg.ProjectID,
-		SubscriptionID: cfg.Consumer.SubscriptionID,
-	}
-	consumer, err := messagepipeline.NewGooglePubsubConsumer(serviceCtx, consumerCfg, psClient, logger)
+	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults()
+	consumerCfg.ProjectID = cfg.ProjectID
+	consumerCfg.SubscriptionID = cfg.Consumer.SubscriptionID
+	consumer, err := messagepipeline.NewGooglePubsubConsumer(ctx, consumerCfg, psClient, logger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Pub/Sub consumer: %w", err)
 	}
@@ -95,8 +77,9 @@ func NewIceStoreServiceWrapper(
 	batcher, err := icestore.NewGCSBatchProcessor(
 		icestore.NewGCSClientAdapter(gcsClient),
 		&icestore.BatcherConfig{
-			BatchSize:    cfg.BatchProcessing.BatchSize,
-			FlushTimeout: cfg.BatchProcessing.FlushTimeout,
+			BatchSize:     cfg.BatchProcessing.BatchSize,
+			FlushInterval: cfg.BatchProcessing.FlushInterval,
+			UploadTimeout: cfg.BatchProcessing.UploadTimeout,
 		},
 		icestore.GCSBatchUploaderConfig{
 			BucketName:   cfg.IceStore.BucketName,
@@ -112,16 +95,19 @@ func NewIceStoreServiceWrapper(
 		cfg.BatchProcessing.NumWorkers,
 		consumer,
 		batcher,
-		icestore.ArchivalTransformer,
+		// The transformer now requires a context, which we provide.
+		func(ctx context.Context, msg types.ConsumedMessage) (*icestore.ArchivalData, bool, error) {
+			return icestore.ArchivalTransformer(ctx, msg)
+		},
 		logger,
 	)
 	if err != nil {
-		batcher.Stop()
+		// Stop the batcher if the final service creation fails.
+		_ = batcher.Stop(context.Background())
 		return nil, fmt.Errorf("failed to create processing service: %w", err)
 	}
 
 	baseServer := microservice.NewBaseServer(logger, cfg.HTTPPort)
-
 	return &IceStoreServiceWrapper{
 		BaseServer:        baseServer,
 		processingService: processingService,
@@ -134,48 +120,50 @@ func NewIceStoreServiceWrapper(
 }
 
 // Start initiates the IceStore processing service and the embedded HTTP server.
-// It also attempts to create the GCS bucket if it doesn't exist.
-func (s *IceStoreServiceWrapper) Start() error {
+func (s *IceStoreServiceWrapper) Start(ctx context.Context) error {
 	s.logger.Info().Msg("Starting IceStore server components...")
 
-	// Attempt to create the GCS bucket. In production, this should be handled
-	// by IaC (e.g., via ServiceDirector). This is for local/dev convenience.
+	createCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	s.logger.Info().Str("bucket", s.bucketName).Msg("Ensuring GCS bucket exists.")
-	if err := s.gcsClient.Bucket(s.bucketName).Create(context.Background(), s.projectID, nil); err != nil {
-		// Ignore "already exists" errors, but log others as a warning.
-		if !strings.Contains(err.Error(), "You already own this bucket") && !strings.Contains(err.Error(), "bucket already exists") {
-			s.logger.Warn().Err(err).Str("bucket", s.bucketName).Msg("Failed to create GCS bucket; please ensure it exists.")
-		} else {
-			s.logger.Info().Str("bucket", s.bucketName).Msg("GCS bucket already exists.")
+	if err := s.gcsClient.Bucket(s.bucketName).Create(createCtx, s.projectID, nil); err != nil {
+		if !strings.Contains(err.Error(), "already exists") {
+			s.logger.Warn().Err(err).Str("bucket", s.bucketName).Msg("Could not create/verify GCS bucket; please ensure it exists.")
 		}
 	}
 
-	if err := s.processingService.Start(context.Background()); err != nil {
+	if err := s.processingService.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start processing service: %w", err)
 	}
 	s.logger.Info().Msg("Data processing service started.")
 	return s.BaseServer.Start()
 }
 
-// Shutdown gracefully stops the IceStore processing service and the embedded HTTP server.
-func (s *IceStoreServiceWrapper) Shutdown() {
+// Shutdown gracefully stops the IceStore processing service and its components.
+func (s *IceStoreServiceWrapper) Shutdown(ctx context.Context) error {
 	s.logger.Info().Msg("Shutting down IceStore server components...")
-	s.processingService.Stop()
+	s.processingService.Stop(ctx)
 	s.logger.Info().Msg("Data processing service stopped.")
-	s.BaseServer.Shutdown()
 
+	// Close the clients this wrapper is responsible for.
 	if s.pubsubClient != nil {
 		if err := s.pubsubClient.Close(); err != nil {
 			s.logger.Error().Err(err).Msg("Error closing Pub/Sub client.")
 		}
-		s.logger.Info().Msg("Pub/Sub client closed.")
 	}
 	if s.gcsClient != nil {
 		if err := s.gcsClient.Close(); err != nil {
 			s.logger.Error().Err(err).Msg("Error closing GCS client.")
 		}
-		s.logger.Info().Msg("GCS client closed.")
 	}
+
+	return s.BaseServer.Shutdown(ctx)
+}
+
+// Mux returns the HTTP ServeMux for the service.
+func (s *IceStoreServiceWrapper) Mux() *http.ServeMux {
+	return s.BaseServer.Mux()
 }
 
 // GetHTTPPort returns the HTTP port the service is listening on.

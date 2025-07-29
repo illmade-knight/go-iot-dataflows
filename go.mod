@@ -5,10 +5,10 @@ go 1.23.0
 require (
 	cloud.google.com/go/bigquery v1.69.0
 	cloud.google.com/go/firestore v1.18.0
-	cloud.google.com/go/pubsub v1.49.0
+	cloud.google.com/go/pubsub v1.50.0
 	cloud.google.com/go/storage v1.56.0
 	github.com/google/uuid v1.6.0
-	github.com/illmade-knight/go-dataflow v0.0.13-beta
+	github.com/illmade-knight/go-dataflow v0.0.14-beta
 	github.com/illmade-knight/go-test v0.0.2-beta
 	github.com/rs/zerolog v1.34.0
 	github.com/stretchr/testify v1.10.0
@@ -24,6 +24,7 @@ require (
 	cloud.google.com/go/iam v1.5.2 // indirect
 	cloud.google.com/go/longrunning v0.6.7 // indirect
 	cloud.google.com/go/monitoring v1.24.2 // indirect
+	cloud.google.com/go/pubsub/v2 v2.0.0 // indirect
 	dario.cat/mergo v1.0.1 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20210617225240-d185dfc1b5a1 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.27.0 // indirect

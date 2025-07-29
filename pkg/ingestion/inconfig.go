@@ -30,8 +30,9 @@ type Config struct {
 func LoadConfigDefaults(projectID string) (*Config, error) {
 	cfg := &Config{
 		BaseConfig: microservice.BaseConfig{
-			LogLevel: "debug",
-			HTTPPort: ":8081",
+			ProjectID: projectID,
+			LogLevel:  "debug",
+			HTTPPort:  ":8081",
 		},
 		NumProcessingWorkers: 20,
 	}

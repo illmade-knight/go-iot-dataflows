@@ -51,7 +51,7 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	t.Cleanup(func() { _ = fsClient.Close() })
 
 	testDeviceID := "device-001"
-	testDeviceData := enrich.DeviceMetadata{ClientID: "client-abc", LocationID: "location-123", Category: "sensor"}
+	testDeviceData := DeviceInfo{ClientID: "client-abc", LocationID: "location-123", Category: "sensor"}
 	_, err = fsClient.Collection("devices").Doc(testDeviceID).Set(testContext, testDeviceData)
 	require.NoError(t, err)
 
@@ -83,7 +83,7 @@ func TestEnrichmentServiceWrapper_Integration(t *testing.T) {
 	require.NoError(t, err)
 
 	// --- 5. Create and Start the Service Wrapper ---
-	wrapper, err := enrich.NewEnrichmentServiceWrapperWithClients(testContext, cfg, logger, psClient, fsClient)
+	wrapper, err := enrich.NewEnrichmentServiceWrapperWithClients(testContext, cfg, logger, psClient, fsClient, BasicKeyExtractor, DeviceEnricher)
 	require.NoError(t, err)
 
 	serviceCtx, serviceCancel := context.WithCancel(testContext)

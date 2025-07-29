@@ -46,8 +46,9 @@ type Config struct {
 func LoadConfigDefaults(projectID string) (*Config, error) {
 	cfg := &Config{
 		BaseConfig: microservice.BaseConfig{
-			LogLevel: "debug",
-			HTTPPort: ":8082",
+			ProjectID: projectID,
+			LogLevel:  "debug",
+			HTTPPort:  ":8082",
 		},
 		ProducerConfig: messagepipeline.NewGooglePubsubProducerDefaults(projectID),
 		CacheConfig: CacheConfig{

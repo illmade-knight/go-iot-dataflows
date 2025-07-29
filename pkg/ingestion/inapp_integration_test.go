@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/illmade-knight/go-dataflow/pkg/types"
 	"os"
 	"testing"
 	"time"
@@ -51,8 +52,19 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 		PubsubOptions:        pubsubConnection.ClientOptions,
 	}
 
+	// The transformer logic is defined in the test setup.
+	ingestionTransformer := func(ctx context.Context, msg types.ConsumedMessage) (*mqttconverter.RawMessage, bool, error) {
+		// This logic can be expanded, but for now, it's a direct conversion.
+		transformed := &mqttconverter.RawMessage{
+			Topic:     msg.Attributes["mqtt_topic"],
+			Payload:   msg.Payload,
+			Timestamp: msg.PublishTime,
+		}
+		return transformed, false, nil
+	}
+
 	// --- 3. Create and Start the Service Wrapper ---
-	serviceWrapper, err := NewIngestionServiceWrapper(ctx, cfg, logger)
+	serviceWrapper, err := NewIngestionServiceWrapper[mqttconverter.RawMessage](ctx, cfg, ingestionTransformer, logger)
 	require.NoError(t, err)
 
 	serviceCtx, serviceCancel := context.WithCancel(ctx)

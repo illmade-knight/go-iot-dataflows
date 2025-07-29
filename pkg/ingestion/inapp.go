@@ -11,22 +11,22 @@ import (
 	"github.com/illmade-knight/go-dataflow/pkg/messagepipeline"
 	"github.com/illmade-knight/go-dataflow/pkg/microservice"
 	"github.com/illmade-knight/go-dataflow/pkg/mqttconverter"
-	"github.com/illmade-knight/go-dataflow/pkg/types"
 )
 
 // IngestionServiceWrapper now wraps the generic ProcessingService.
-type IngestionServiceWrapper struct {
+type IngestionServiceWrapper[T any] struct {
 	*microservice.BaseServer
-	processingService *messagepipeline.ProcessingService[mqttconverter.RawMessage]
+	processingService *messagepipeline.ProcessingService[T]
 	logger            zerolog.Logger
 }
 
 // NewIngestionServiceWrapper assembles the full ingestion pipeline from standard components.
-func NewIngestionServiceWrapper(
+func NewIngestionServiceWrapper[T any](
 	ctx context.Context,
 	cfg *Config,
+	transformer messagepipeline.MessageTransformer[T],
 	logger zerolog.Logger,
-) (*IngestionServiceWrapper, error) {
+) (*IngestionServiceWrapper[T], error) {
 
 	serviceLogger := logger.With().Str("service", "IngestionService").Logger()
 
@@ -42,23 +42,13 @@ func NewIngestionServiceWrapper(
 	}
 
 	// 3. Create the GooglePubsubProducer.
-	producer, err := messagepipeline.NewGooglePubsubProducer[mqttconverter.RawMessage](ctx, &cfg.Producer, psClient, serviceLogger)
+	producer, err := messagepipeline.NewGooglePubsubProducer[T](ctx, &cfg.Producer, psClient, serviceLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Google Pub/Sub producer: %w", err)
 	}
 
-	// 4. Define the transformer logic.
-	transformer := func(ctx context.Context, msg types.ConsumedMessage) (*mqttconverter.RawMessage, bool, error) {
-		transformed := &mqttconverter.RawMessage{
-			Topic:     msg.Attributes["mqtt_topic"],
-			Payload:   msg.Payload,
-			Timestamp: msg.PublishTime,
-		}
-		return transformed, false, nil
-	}
-
 	// 5. Create the generic ProcessingService.
-	processingService, err := messagepipeline.NewProcessingService[mqttconverter.RawMessage](
+	processingService, err := messagepipeline.NewProcessingService[T](
 		cfg.NumProcessingWorkers,
 		consumer,
 		producer,
@@ -70,7 +60,7 @@ func NewIngestionServiceWrapper(
 	}
 
 	baseServer := microservice.NewBaseServer(logger, cfg.HTTPPort)
-	return &IngestionServiceWrapper{
+	return &IngestionServiceWrapper[T]{
 		BaseServer:        baseServer,
 		processingService: processingService,
 		logger:            serviceLogger,
@@ -78,7 +68,7 @@ func NewIngestionServiceWrapper(
 }
 
 // Start initiates the processing service and the embedded HTTP server.
-func (s *IngestionServiceWrapper) Start(ctx context.Context) error {
+func (s *IngestionServiceWrapper[T]) Start(ctx context.Context) error {
 	s.logger.Info().Msg("Starting ingestion service components...")
 	if err := s.processingService.Start(ctx); err != nil {
 		s.logger.Error().Err(err).Msg("Failed to start core processing service")
@@ -88,7 +78,7 @@ func (s *IngestionServiceWrapper) Start(ctx context.Context) error {
 }
 
 // Shutdown gracefully stops the processing service and the HTTP server.
-func (s *IngestionServiceWrapper) Shutdown(ctx context.Context) error {
+func (s *IngestionServiceWrapper[T]) Shutdown(ctx context.Context) error {
 	s.logger.Info().Msg("Shutting down ingestion server components...")
 	s.processingService.Stop(ctx)
 	s.logger.Info().Msg("Core processing service stopped.")
@@ -96,11 +86,11 @@ func (s *IngestionServiceWrapper) Shutdown(ctx context.Context) error {
 }
 
 // Mux returns the HTTP ServeMux for the service.
-func (s *IngestionServiceWrapper) Mux() *http.ServeMux {
+func (s *IngestionServiceWrapper[T]) Mux() *http.ServeMux {
 	return s.BaseServer.Mux()
 }
 
 // GetHTTPPort returns the HTTP port the service is listening on.
-func (s *IngestionServiceWrapper) GetHTTPPort() string {
+func (s *IngestionServiceWrapper[T]) GetHTTPPort() string {
 	return s.BaseServer.GetHTTPPort()
 }

@@ -17,27 +17,23 @@ import (
 	"google.golang.org/api/option"
 )
 
-// DeviceMetadata is the concrete data structure this service fetches for enrichment.
-type DeviceMetadata struct {
-	ClientID   string `firestore:"clientID"`
-	LocationID string `firestore:"locationID"`
-	Category   string `firestore:"deviceCategory"`
-}
-
-// EnrichmentServiceWrapper wraps the processing service for a common interface.
-type EnrichmentServiceWrapper struct {
+// EnrichmentServiceWrapper is now a generic wrapper over the enrichment pipeline.
+// It is parameterized by the enrichment key type (K) and the enrichment data type (V).
+type EnrichmentServiceWrapper[K comparable, V any] struct {
 	*microservice.BaseServer
 	processingService *messagepipeline.ProcessingService[types.PublishMessage]
 	fetcherCleanup    func() error
 	logger            zerolog.Logger
 }
 
-// NewEnrichmentServiceWrapper creates and configures a new EnrichmentServiceWrapper.
-func NewEnrichmentServiceWrapper(
+// NewEnrichmentServiceWrapper is the generic, high-level constructor.
+func NewEnrichmentServiceWrapper[K comparable, V any](
 	ctx context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
-) (wrapper *EnrichmentServiceWrapper, err error) {
+	keyExtractor enrichment.KeyExtractor[K],
+	enricher enrichment.Enricher[V],
+) (wrapper *EnrichmentServiceWrapper[K, V], err error) {
 	var psClient *pubsub.Client
 	var fsClient *firestore.Client
 
@@ -70,17 +66,19 @@ func NewEnrichmentServiceWrapper(
 		return nil, fmt.Errorf("failed to create Firestore client: %w", err)
 	}
 
-	return NewEnrichmentServiceWrapperWithClients(ctx, cfg, logger, psClient, fsClient)
+	return NewEnrichmentServiceWrapperWithClients[K, V](ctx, cfg, logger, psClient, fsClient, keyExtractor, enricher)
 }
 
 // NewEnrichmentServiceWrapperWithClients creates the service with injected clients for testability.
-func NewEnrichmentServiceWrapperWithClients(
+func NewEnrichmentServiceWrapperWithClients[K comparable, V any](
 	ctx context.Context,
 	cfg *Config,
 	logger zerolog.Logger,
 	psClient *pubsub.Client,
 	fsClient *firestore.Client,
-) (wrapper *EnrichmentServiceWrapper, err error) {
+	keyExtractor enrichment.KeyExtractor[K],
+	enricher enrichment.Enricher[V],
+) (wrapper *EnrichmentServiceWrapper[K, V], err error) {
 	enrichmentLogger := logger.With().Str("component", "EnrichmentService").Logger()
 
 	var fetcherCleanup func() error
@@ -90,37 +88,23 @@ func NewEnrichmentServiceWrapperWithClients(
 		}
 	}()
 
-	sourceFetcher, err := cache.NewFirestoreSource[string, DeviceMetadata](cfg.CacheConfig.FirestoreConfig, fsClient, enrichmentLogger)
+	sourceFetcher, err := cache.NewFirestoreSource[K, V](cfg.CacheConfig.FirestoreConfig, fsClient, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Firestore source fetcher: %w", err)
 	}
 
-	redisCache, err := cache.NewRedisCache[string, DeviceMetadata](ctx, &cfg.CacheConfig.RedisConfig, enrichmentLogger)
+	redisCache, err := cache.NewRedisCache[K, V](ctx, &cfg.CacheConfig.RedisConfig, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create redis cache layer: %w", err)
 	}
 
 	fetcherCfg := &enrichment.FetcherConfig{CacheWriteTimeout: cfg.CacheConfig.CacheWriteTimeout}
-	fetcher, fetcherCleanup, err := enrichment.NewCacheFallbackFetcher[string, DeviceMetadata](fetcherCfg, redisCache, sourceFetcher, enrichmentLogger)
+	fetcher, fetcherCleanup, err := enrichment.NewCacheFallbackFetcher[K, V](fetcherCfg, redisCache, sourceFetcher, enrichmentLogger)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create cache fallback fetcher: %w", err)
 	}
 
-	keyExtractor := func(msg types.ConsumedMessage) (string, bool) {
-		uid, ok := msg.Attributes["uid"]
-		return uid, ok
-	}
-
-	enricherFunc := func(msg *types.PublishMessage, data DeviceMetadata) {
-		if msg.EnrichmentData == nil {
-			msg.EnrichmentData = make(map[string]interface{})
-		}
-		msg.EnrichmentData["name"] = data.ClientID
-		msg.EnrichmentData["location"] = data.LocationID
-		msg.EnrichmentData["serviceTag"] = data.Category
-	}
-
-	transformer := enrichment.NewEnrichmentTransformer[string, DeviceMetadata](fetcher, keyExtractor, enricherFunc, nil, enrichmentLogger)
+	transformer := enrichment.NewEnrichmentTransformer[K, V](fetcher, keyExtractor, enricher, nil, enrichmentLogger)
 
 	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(cfg.ProjectID)
 	consumerCfg.SubscriptionID = cfg.Consumer.SubscriptionID
@@ -141,7 +125,7 @@ func NewEnrichmentServiceWrapperWithClients(
 
 	baseServer := microservice.NewBaseServer(enrichmentLogger, cfg.HTTPPort)
 
-	return &EnrichmentServiceWrapper{
+	return &EnrichmentServiceWrapper[K, V]{
 		BaseServer:        baseServer,
 		processingService: processingService,
 		fetcherCleanup:    fetcherCleanup,
@@ -149,8 +133,8 @@ func NewEnrichmentServiceWrapperWithClients(
 	}, nil
 }
 
-// Start initiates the processing service and the embedded HTTP server.
-func (s *EnrichmentServiceWrapper) Start(ctx context.Context) error {
+// Start is now a method on the generic wrapper.
+func (s *EnrichmentServiceWrapper[K, V]) Start(ctx context.Context) error {
 	s.logger.Info().Msg("Starting enrichment server components...")
 	if err := s.processingService.Start(ctx); err != nil {
 		return fmt.Errorf("failed to start processing service: %w", err)
@@ -159,8 +143,8 @@ func (s *EnrichmentServiceWrapper) Start(ctx context.Context) error {
 	return s.BaseServer.Start()
 }
 
-// Shutdown gracefully stops the processing service and its components.
-func (s *EnrichmentServiceWrapper) Shutdown(ctx context.Context) error {
+// Shutdown is now a method on the generic wrapper.
+func (s *EnrichmentServiceWrapper[K, V]) Shutdown(ctx context.Context) error {
 	s.logger.Info().Msg("Shutting down enrichment server components...")
 	s.processingService.Stop(ctx)
 	s.logger.Info().Msg("Data processing service stopped.")
@@ -174,10 +158,10 @@ func (s *EnrichmentServiceWrapper) Shutdown(ctx context.Context) error {
 	return s.BaseServer.Shutdown(ctx)
 }
 
-func (s *EnrichmentServiceWrapper) Mux() *http.ServeMux {
+func (s *EnrichmentServiceWrapper[K, V]) Mux() *http.ServeMux {
 	return s.BaseServer.Mux()
 }
 
-func (s *EnrichmentServiceWrapper) GetHTTPPort() string {
+func (s *EnrichmentServiceWrapper[K, V]) GetHTTPPort() string {
 	return s.BaseServer.GetHTTPPort()
 }

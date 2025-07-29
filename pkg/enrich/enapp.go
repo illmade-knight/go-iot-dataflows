@@ -1,4 +1,3 @@
-// github.com/illmade-knight/go-iot-dataflows/builder/enrichment/enapp.go
 package enrich
 
 import (
@@ -93,17 +92,24 @@ func NewEnrichmentServiceWrapperWithClients[K comparable, V any](
 		return nil, fmt.Errorf("failed to create Firestore source fetcher: %w", err)
 	}
 
-	redisCache, err := cache.NewRedisCache[K, V](ctx, &cfg.CacheConfig.RedisConfig, enrichmentLogger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create redis cache layer: %w", err)
-	}
+	fetcher := sourceFetcher.Fetch
+	fetcherCleanup = sourceFetcher.Close
 
-	fetcherCfg := &enrichment.FetcherConfig{CacheWriteTimeout: cfg.CacheConfig.CacheWriteTimeout}
-	fetcher, fetcherCleanup, err := enrichment.NewCacheFallbackFetcher[K, V](fetcherCfg, redisCache, sourceFetcher, enrichmentLogger)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create cache fallback fetcher: %w", err)
-	}
+	// for production we should have a redis layer
+	if cfg.CacheConfig.RedisConfig.Addr != "" {
+		redisCache, err := cache.NewRedisCache[K, V](ctx, &cfg.CacheConfig.RedisConfig, enrichmentLogger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create redis cache layer: %w", err)
+		}
 
+		fetcherCfg := &enrichment.FetcherConfig{CacheWriteTimeout: cfg.CacheConfig.CacheWriteTimeout}
+		fetcher, fetcherCleanup, err = enrichment.NewCacheFallbackFetcher[K, V](fetcherCfg, redisCache, sourceFetcher, enrichmentLogger)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create cache fallback fetcher: %w", err)
+		}
+	} else {
+		logger.Warn().Msg("no redis layer - use only in low volume scenarios")
+	}
 	transformer := enrichment.NewEnrichmentTransformer[K, V](fetcher, keyExtractor, enricher, nil, enrichmentLogger)
 
 	consumerCfg := messagepipeline.NewGooglePubsubConsumerDefaults(cfg.ProjectID)

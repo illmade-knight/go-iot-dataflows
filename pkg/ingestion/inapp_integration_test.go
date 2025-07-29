@@ -64,7 +64,7 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	}
 
 	// --- 3. Create and Start the Service Wrapper ---
-	serviceWrapper, err := NewIngestionServiceWrapper[mqttconverter.RawMessage](ctx, cfg, ingestionTransformer, logger)
+	serviceWrapper, err := NewIngestionServiceWrapper[mqttconverter.RawMessage](ctx, cfg, logger, ingestionTransformer)
 	require.NoError(t, err)
 
 	serviceCtx, serviceCancel := context.WithCancel(ctx)

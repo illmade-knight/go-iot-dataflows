@@ -52,13 +52,18 @@ func LoadConfigDefaults(projectID string) (*Config, error) {
 		},
 		ProducerConfig: messagepipeline.NewGooglePubsubProducerDefaults(projectID),
 		CacheConfig: CacheConfig{
-			FirestoreConfig: &cache.FirestoreConfig{},
+			CacheWriteTimeout: 5 * time.Second,
+			RedisConfig: cache.RedisConfig{
+				CacheTTL: 2 * time.Hour,
+			},
+			FirestoreConfig: &cache.FirestoreConfig{
+				ProjectID: projectID,
+			},
+		},
+		ProcessorConfig: ProcessorConfig{
+			NumWorkers: 5,
 		},
 	}
-	cfg.CacheConfig.RedisConfig.CacheTTL = 2 * time.Hour
-	cfg.CacheConfig.FirestoreConfig.CollectionName = "devices"
-	cfg.CacheConfig.CacheWriteTimeout = 5 * time.Second // Default for background write.
-	cfg.ProcessorConfig.NumWorkers = 5
 
 	flag.StringVar(&cfg.CacheConfig.RedisConfig.Addr, "cache.redis.addr", cfg.CacheConfig.RedisConfig.Addr, "Redis address")
 	flag.DurationVar(&cfg.CacheConfig.RedisConfig.CacheTTL, "cache.redis.cache-ttl", cfg.CacheConfig.RedisConfig.CacheTTL, "Redis cache TTL")

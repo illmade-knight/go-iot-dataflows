@@ -24,8 +24,8 @@ type IngestionServiceWrapper[T any] struct {
 func NewIngestionServiceWrapper[T any](
 	ctx context.Context,
 	cfg *Config,
-	transformer messagepipeline.MessageTransformer[T],
 	logger zerolog.Logger,
+	transformer messagepipeline.MessageTransformer[T],
 ) (*IngestionServiceWrapper[T], error) {
 
 	serviceLogger := logger.With().Str("service", "IngestionService").Logger()

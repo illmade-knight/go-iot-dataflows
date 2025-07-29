@@ -42,6 +42,8 @@ func LoadConfigDefaults(projectID string) (*Config, error) {
 			HTTPPort:  ":8084",
 		},
 	}
+	cfg.BigQueryConfig.ProjectID = projectID
+
 	cfg.BatchProcessing.NumWorkers = 5
 	cfg.BatchProcessing.BatchSize = 100
 	cfg.BatchProcessing.FlushInterval = 1 * time.Minute

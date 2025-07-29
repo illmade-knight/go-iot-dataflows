@@ -44,12 +44,13 @@ type Config struct {
 	}
 }
 
-// LoadConfig initializes and loads configuration from defaults, flags, and environment variables.
-func LoadConfig() (*Config, error) {
+// LoadConfigDefaults initializes and loads configuration from defaults, flags, and environment variables.
+func LoadConfigDefaults(projectID string) (*Config, error) {
 	cfg := &Config{
 		BaseConfig: microservice.BaseConfig{
-			LogLevel: "debug",
-			HTTPPort: ":8083",
+			ProjectID: projectID,
+			LogLevel:  "debug",
+			HTTPPort:  ":8083",
 		},
 	}
 	cfg.BatchProcessing.NumWorkers = 5
@@ -57,8 +58,6 @@ func LoadConfig() (*Config, error) {
 	cfg.BatchProcessing.FlushInterval = 1 * time.Minute
 	cfg.BatchProcessing.UploadTimeout = 2 * time.Minute
 
-	flag.StringVar(&cfg.Consumer.SubscriptionID, "consumer.subscription-id", cfg.Consumer.SubscriptionID, "Pub/Sub Subscription ID to consume from")
-	flag.StringVar(&cfg.IceStore.BucketName, "ice_store.bucket-name", cfg.IceStore.BucketName, "Google Cloud Storage bucket name")
 	flag.IntVar(&cfg.BatchProcessing.NumWorkers, "batch.num-workers", cfg.BatchProcessing.NumWorkers, "Number of processing workers")
 	flag.IntVar(&cfg.BatchProcessing.BatchSize, "batch.size", cfg.BatchProcessing.BatchSize, "GCS batch write size")
 	flag.DurationVar(&cfg.BatchProcessing.FlushInterval, "batch.flush-interval", cfg.BatchProcessing.FlushInterval, "GCS batch flush interval")

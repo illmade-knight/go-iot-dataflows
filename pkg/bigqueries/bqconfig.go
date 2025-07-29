@@ -33,12 +33,13 @@ type Config struct {
 	}
 }
 
-// LoadConfig initializes and loads configuration from defaults, flags, and environment variables.
-func LoadConfig() (*Config, error) {
+// LoadConfigDefaults initializes and loads configuration from defaults, flags, and environment variables.
+func LoadConfigDefaults(projectID string) (*Config, error) {
 	cfg := &Config{
 		BaseConfig: microservice.BaseConfig{
-			LogLevel: "debug",
-			HTTPPort: ":8082",
+			ProjectID: projectID,
+			LogLevel:  "debug",
+			HTTPPort:  ":8084",
 		},
 	}
 	cfg.BatchProcessing.NumWorkers = 5
@@ -46,9 +47,6 @@ func LoadConfig() (*Config, error) {
 	cfg.BatchProcessing.FlushInterval = 1 * time.Minute
 	cfg.BatchProcessing.InsertTimeout = 2 * time.Minute
 
-	flag.StringVar(&cfg.Consumer.SubscriptionID, "consumer.subscription-id", cfg.Consumer.SubscriptionID, "Pub/Sub Subscription ID to consume from")
-	flag.StringVar(&cfg.BigQueryConfig.DatasetID, "bigquery.dataset-id", cfg.BigQueryConfig.DatasetID, "BigQuery Dataset ID")
-	flag.StringVar(&cfg.BigQueryConfig.TableID, "bigquery.table-id", cfg.BigQueryConfig.TableID, "BigQuery Table ID")
 	flag.IntVar(&cfg.BatchProcessing.NumWorkers, "batch.num-workers", cfg.BatchProcessing.NumWorkers, "Number of processing workers")
 	flag.IntVar(&cfg.BatchProcessing.BatchSize, "batch.size", cfg.BatchProcessing.BatchSize, "BigQuery batch insert size")
 	flag.DurationVar(&cfg.BatchProcessing.FlushInterval, "batch.flush-interval", cfg.BatchProcessing.FlushInterval, "BigQuery batch flush interval")

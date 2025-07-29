@@ -20,9 +20,8 @@ type Config struct {
 	ServiceDirectorURL string
 	PubsubOptions      []option.ClientOption
 
-	MQTT     mqttconverter.MQTTClientConfig
-	Producer messagepipeline.GooglePubsubProducerConfig
-	// REFACTOR: Removed obsolete Service config, added NumProcessingWorkers.
+	MQTT                 mqttconverter.MQTTClientConfig
+	Producer             messagepipeline.GooglePubsubProducerConfig
 	NumProcessingWorkers int
 }
 

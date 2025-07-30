@@ -9,6 +9,7 @@ import (
 	"errors"
 	"github.com/illmade-knight/go-dataflow/pkg/types"
 	"os"
+	"regexp"
 	"testing"
 	"time"
 
@@ -25,6 +26,8 @@ import (
 func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	t.Cleanup(cancel)
+
+	deviceFinder := regexp.MustCompile(`^[^/]+/([^/]+)/[^/]+$`)
 
 	// --- 1. Setup Emulators and Logger ---
 	logger := zerolog.New(os.Stderr).Level(zerolog.InfoLevel)
@@ -53,18 +56,27 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 	}
 
 	// The transformer logic is defined in the test setup.
-	ingestionTransformer := func(ctx context.Context, msg types.ConsumedMessage) (*mqttconverter.RawMessage, bool, error) {
+	ingestionTransformer := func(ctx context.Context, msg types.ConsumedMessage) (*types.PublishMessage, bool, error) {
 		// This logic can be expanded, but for now, it's a direct conversion.
-		transformed := &mqttconverter.RawMessage{
-			Topic:     msg.Attributes["mqtt_topic"],
-			Payload:   msg.Payload,
-			Timestamp: msg.PublishTime,
+		topic := msg.Attributes["mqtt_topic"]
+		var deviceID string
+
+		matches := deviceFinder.FindStringSubmatch(topic)
+		if len(matches) > 1 {
+			deviceID = matches[1]
 		}
-		return transformed, false, nil
+
+		output := &types.PublishMessage{
+			ID:             msg.ID,
+			Payload:        msg.Payload,
+			PublishTime:    msg.PublishTime,
+			EnrichmentData: map[string]interface{}{"DeviceID": deviceID, "Topic": topic, "Timestamp": msg.PublishTime},
+		}
+		return output, false, nil
 	}
 
 	// --- 3. Create and Start the Service Wrapper ---
-	serviceWrapper, err := NewIngestionServiceWrapper[mqttconverter.RawMessage](ctx, cfg, logger, ingestionTransformer)
+	serviceWrapper, err := NewIngestionServiceWrapper[types.PublishMessage](ctx, cfg, logger, ingestionTransformer)
 	require.NoError(t, err)
 
 	serviceCtx, serviceCancel := context.WithCancel(ctx)
@@ -120,11 +132,12 @@ func TestIngestionServiceWrapper_Integration(t *testing.T) {
 		}
 		require.NotNil(t, receivedMsg, "Did not receive a message from Pub/Sub")
 
-		var result mqttconverter.RawMessage
+		var result types.PublishMessage
 		err = json.Unmarshal(receivedMsg.Data, &result)
 		require.NoError(t, err)
 
-		assert.Equal(t, publishTopic, result.Topic)
+		assert.Equal(t, publishTopic, result.EnrichmentData["Topic"])
+		assert.Equal(t, "test-device-123", result.EnrichmentData["DeviceID"])
 		assert.JSONEq(t, string(payloadBytes), string(result.Payload))
 	})
 }

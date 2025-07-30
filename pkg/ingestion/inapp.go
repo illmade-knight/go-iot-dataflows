@@ -16,6 +16,7 @@ import (
 // IngestionServiceWrapper now wraps the generic ProcessingService.
 type IngestionServiceWrapper[T any] struct {
 	*microservice.BaseServer
+	consumer          *mqttconverter.MqttConsumer
 	processingService *messagepipeline.ProcessingService[T]
 	logger            zerolog.Logger
 }
@@ -63,6 +64,7 @@ func NewIngestionServiceWrapper[T any](
 
 	serviceWrapper := &IngestionServiceWrapper[T]{
 		BaseServer:        baseServer,
+		consumer:          consumer,
 		processingService: processingService,
 		logger:            serviceLogger,
 	}
@@ -111,11 +113,11 @@ func (s *IngestionServiceWrapper[T]) registerHandlers() {
 func (s *IngestionServiceWrapper[T]) readinessCheck(w http.ResponseWriter, r *http.Request) {
 	// This requires exposing the connection status from the consumer.
 	// For example, add a method like `IsConnected()` to the consumer interface.
-	if s.processingService.IsConsumerConnected() { // Assumes this method is added
+	if s.consumer.IsConnected() { // Assumes this method is added
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("READY"))
+		_, _ = w.Write([]byte("READY"))
 		return
 	}
 	w.WriteHeader(http.StatusServiceUnavailable)
-	w.Write([]byte("NOT READY"))
+	_, _ = w.Write([]byte("NOT READY"))
 }

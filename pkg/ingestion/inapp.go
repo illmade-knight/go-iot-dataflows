@@ -60,11 +60,17 @@ func NewIngestionServiceWrapper[T any](
 	}
 
 	baseServer := microservice.NewBaseServer(logger, cfg.HTTPPort)
-	return &IngestionServiceWrapper[T]{
+
+	serviceWrapper := &IngestionServiceWrapper[T]{
 		BaseServer:        baseServer,
 		processingService: processingService,
 		logger:            serviceLogger,
-	}, nil
+	}
+
+	// NEW: Register the custom handlers for this service.
+	serviceWrapper.registerHandlers()
+
+	return serviceWrapper, nil
 }
 
 // Start initiates the processing service and the embedded HTTP server.
@@ -93,4 +99,23 @@ func (s *IngestionServiceWrapper[T]) Mux() *http.ServeMux {
 // GetHTTPPort returns the HTTP port the service is listening on.
 func (s *IngestionServiceWrapper[T]) GetHTTPPort() string {
 	return s.BaseServer.GetHTTPPort()
+}
+
+// IngestionServiceWrapper register new handler on top of the basic /healthz
+func (s *IngestionServiceWrapper[T]) registerHandlers() {
+	mux := s.Mux()
+	// New readiness check
+	mux.HandleFunc("/readyz", s.readinessCheck)
+}
+
+func (s *IngestionServiceWrapper[T]) readinessCheck(w http.ResponseWriter, r *http.Request) {
+	// This requires exposing the connection status from the consumer.
+	// For example, add a method like `IsConnected()` to the consumer interface.
+	if s.processingService.IsConsumerConnected() { // Assumes this method is added
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("READY"))
+		return
+	}
+	w.WriteHeader(http.StatusServiceUnavailable)
+	w.Write([]byte("NOT READY"))
 }
